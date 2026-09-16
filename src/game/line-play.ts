@@ -68,6 +68,7 @@ export class LinePlay {
   private readonly center?: PlayerActor;
   private helpDl?: PlayerActor;
   private t = 0;
+  private losZ = LOS_Z;
 
   constructor(byId: Map<string, PlayerActor>) {
     this.byId = byId;
@@ -85,6 +86,13 @@ export class LinePlay {
       m.locked = false;
       m.contained = false;
       m.wig = 0;
+    }
+  }
+
+  setLos(z: number): void {
+    this.losZ = z;
+    for (const m of this.matches) {
+      m.contain.z = m.wide ? z - 0.8 : z - 1.5;
     }
   }
 
@@ -120,7 +128,7 @@ export class LinePlay {
     if (!ol || !dl) {
       return;
     }
-    const cz = s.wide ? LOS_Z - 0.8 : LOS_Z - 1.5;
+    const cz = s.wide ? this.losZ - 0.8 : this.losZ - 1.5;
     this.matches.push({
       ol,
       dl,
@@ -232,7 +240,7 @@ export class LinePlay {
   }
 
   private clampSets(): void {
-    const minZ = LOS_Z - MAX_SET;
+    const minZ = this.losZ - MAX_SET;
     const ids = ['lt', 'lg', 'c', 'rg', 'rt'];
     for (const id of ids) {
       this.clampOl(id, minZ);
@@ -341,20 +349,7 @@ function seek(
   spd: number,
   dt: number
 ): boolean {
-  const d = xzDist(p, to);
-  p.facing = Math.atan2(to.x - p.x, to.z - p.z);
-  if (d < 0.08) {
-    return true;
-  }
-  const step = spd * dt;
-  if (step >= d) {
-    p.x = to.x;
-    p.z = to.z;
-    return true;
-  }
-  p.x += ((to.x - p.x) / d) * step;
-  p.z += ((to.z - p.z) / d) * step;
-  return false;
+  return p.steer(to, dt, spd);
 }
 
 function split(a: PlayerActor, b: PlayerActor, pad: number): void {

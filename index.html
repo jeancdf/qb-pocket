@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>QB Pocket — Smash</title>
+    <title>QB Pocket</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
@@ -15,49 +15,54 @@
     <div id="app">
       <canvas id="game-canvas"></canvas>
 
-      <aside id="hud" class="hud">
+      <div id="scorebug" class="scorebug">
+        <span class="scorebug__team">
+          HOME <b id="home-score">0</b>
+        </span>
+        <span class="scorebug__team scorebug__team--away">
+          AWAY <b id="away-score">0</b>
+        </span>
+        <span id="cover-call" class="scorebug__cover">COVER 3</span>
+        <span id="play-chip" class="scorebug__play">SMASH</span>
+        <span id="down-line" class="scorebug__down">
+          1ST &amp; 10 · OWN 10
+        </span>
+        <span id="yards-chip" class="scorebug__yards">90 YDS</span>
+        <span id="pocket" class="scorebug__pocket"></span>
+      </div>
+      <p id="read-hint" class="read-hint">Read the safeties, then audible.</p>
+
+      <div id="audibles" class="audibles"></div>
+
+      <div id="play-bar" class="play-bar">
+        <button id="snap-btn" type="button">SNAP</button>
+        <button id="reset-btn" type="button" class="ghost">RESET</button>
+        <p class="play-bar__hint">
+          1–4 audible · M motion · ZQSD scramble ·
+          click throw · Space snap
+        </p>
+      </div>
+
+      <aside id="hud" class="hud" hidden>
         <header class="hud__top">
           <div>
-            <p class="hud__kicker">3rd &amp; 7 · Own 40</p>
-            <h1>GUN TRIPS RT</h1>
-            <p class="hud__play">Play: Smash</p>
-          </div>
-          <div class="hud__score">
-            <span>HOME 17</span>
-            <span>AWAY 14</span>
+            <p class="hud__kicker">Playbook</p>
+            <h1 id="play-title">GUN TRIPS RT</h1>
+            <p id="play-name" class="hud__play">Play: Smash</p>
           </div>
         </header>
-
-        <section class="hud__read">
-          <p class="hud__label">Progression</p>
-          <ol>
-            <li>Hitch (Z) — hot vs press</li>
-            <li>Corner (slot) — Cover 3 beater</li>
-            <li>Go (X) — if CB sits</li>
-            <li>Checkdown RB / TE flat</li>
-          </ol>
-        </section>
-
         <section>
           <p class="hud__label">Eligible receivers</p>
           <ul id="receiver-list" class="receivers"></ul>
         </section>
-
-        <p id="pocket" class="hud__pocket"></p>
-        <p id="status" class="hud__status">
-          Pre-snap. Hit SNAP, then throw to the open man.
-        </p>
-
-        <div class="hud__actions">
-          <button id="snap-btn" type="button">SNAP</button>
-          <button id="reset-btn" type="button" class="ghost">RESET</button>
-        </div>
-
-        <p class="hud__help">
-          Space = snap · 1–5 = throw · click a receiver ·
-          scroll to zoom
-        </p>
+        <p id="status" class="hud__status"></p>
       </aside>
+
+      <div id="result" class="result" hidden>
+        <p id="result-kicker" class="result__kicker">TOUCHDOWN</p>
+        <p id="result-title" class="result__title">YOU WIN</p>
+        <p class="result__hint">R — drive again from the 10</p>
+      </div>
 
       <div id="toast" class="toast" hidden></div>
     </div>

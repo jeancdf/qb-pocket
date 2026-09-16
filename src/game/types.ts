@@ -39,8 +39,12 @@ export type Phase =
   | 'presnap'
   | 'play'
   | 'throw'
+  | 'yac'
+  | 'whistle'
   | 'complete'
   | 'incomplete'
-  | 'sack';
+  | 'sack'
+  | 'touchdown'
+  | 'turnover';
 
 export type CoverGrade = 'idle' | 'open' | 'window' | 'covered';

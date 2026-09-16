@@ -1,6 +1,7 @@
 import * as THREE from 'three';
+import { LOS_Z } from './constants';
 import type { TeamMats } from './materials';
-import { xzDist } from './math';
+import { headingLerp, wrapPi, xzDist } from './math';
 import {
   applyHitch,
   applyRun,
@@ -10,7 +11,7 @@ import {
   type AnimKind,
   type PlayerRig
 } from './rig';
-import type { CoverGrade, PlayerDef, Pos, Vec2 } from './types';
+import type { CoverGrade, PlayerDef, Pos, RoutePoint, Vec2 } from './types';
 
 const RING_COL: Record<CoverGrade, number> = {
   idle: 0x000000,
@@ -18,6 +19,19 @@ const RING_COL: Record<CoverGrade, number> = {
   window: 0xe8c547,
   covered: 0xe35d5d
 };
+
+/** Arcade accel — local so ball-speed can own constants.ts. */
+const ACCEL = 32;
+const BRAKE = 46;
+const TURN = 8;
+const PLANT_ANG = 1.4;
+const PLANT_T = 0.14;
+const PLANT_SPD = 2.4;
+const CUT_MIN = 0.32;
+const ARRIVE_R = 1.25;
+const ARRIVED = 0.26;
+const FLOW_HIT = 0.55;
+const MIN_SPD = 0.4;
 
 export type { AnimKind, PlayerRig };
 
@@ -30,10 +44,17 @@ export class PlayerActor {
   z: number;
   facing: number;
   cover: CoverGrade = 'idle';
+  private vx = 0;
+  private vz = 0;
   private idx = 0;
   private wait = 0;
   private gait = 0;
   private plant = 0;
+  private shiftZ = 0;
+  private chasing = false;
+  private holdKind: AnimKind | null = null;
+  private holdLeft = 0;
+  private holdDur = 0.4;
   private ringMat: THREE.MeshBasicMaterial;
 
   constructor(def: PlayerDef, mats: TeamMats) {
@@ -51,38 +72,74 @@ export class PlayerActor {
       depthWrite: false
     });
     this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(0.75, 1.28, 28),
+      new THREE.RingGeometry(0.48, 0.68, 24),
       this.ringMat
     );
     this.ring.rotation.x = -Math.PI / 2;
     this.ring.position.y = 0.04;
     this.mesh.add(this.ring);
+    if (def.pos === 'WR') {
+      this.mesh.add(namePlate(def));
+    }
     this.sync();
   }
 
   reset(): void {
     this.x = this.def.start.x;
-    this.z = this.def.start.z;
+    this.z = this.def.start.z + this.shiftZ;
     this.facing = this.def.heading;
+    this.vx = 0;
+    this.vz = 0;
     this.idx = 0;
     this.wait = 0;
     this.gait = 0;
     this.plant = 0;
+    this.chasing = false;
+    this.holdKind = null;
+    this.holdLeft = 0;
     this.cover = 'idle';
     this.setCover('idle');
     this.setAnim('idle', 0, 0);
     this.sync();
   }
 
+  /** Slide the playbook alignment to a new line of scrimmage. */
+  align(losZ: number): void {
+    this.shiftZ = losZ - LOS_Z;
+    this.reset();
+  }
+
+  /** Swap a skill player's alignment and route (audible). */
+  setSkill(
+    start: Vec2,
+    route: RoutePoint[],
+    name: string
+  ): void {
+    this.def.start = { x: start.x, z: start.z };
+    this.def.route = route.map((p) => ({ ...p }));
+    this.def.routeName = name;
+  }
+
+  setStart(start: Vec2): void {
+    this.def.start = { x: start.x, z: start.z };
+  }
+
   setCover(grade: CoverGrade): void {
     this.cover = grade;
     this.ringMat.color.setHex(RING_COL[grade]);
-    this.ringMat.opacity = grade === 'idle' ? 0 : 0.95;
+    this.ringMat.opacity = grade === 'idle' ? 0 : 0.72;
   }
 
   /** Force a pose. Call after update() to override auto locomotion. */
   setAnim(kind: AnimKind, t: number, speed: number): void {
     poseRig(this.rig, kind, t, speed);
+  }
+
+  /** Hold a throw/catch pose for a beat, then resume. */
+  lockAnim(kind: AnimKind, seconds: number): void {
+    this.holdKind = kind;
+    this.holdDur = seconds;
+    this.holdLeft = seconds;
   }
 
   predict(seconds: number): Vec2 {
@@ -103,11 +160,12 @@ export class PlayerActor {
         continue;
       }
       const p = route[i];
-      const dist = Math.hypot(p.x - x, p.z - z);
-      const spd = p.speed ?? 8;
+      const pz = p.z + this.shiftZ;
+      const dist = Math.hypot(p.x - x, pz - z);
+      const spd = (p.speed ?? 8) * 0.9;
       if (spd < 0.05 || dist < 0.04) {
         x = p.x;
-        z = p.z;
+        z = pz;
         wait = p.wait ?? 0;
         i += 1;
         continue;
@@ -115,14 +173,14 @@ export class PlayerActor {
       const need = dist / spd;
       if (t >= need) {
         x = p.x;
-        z = p.z;
-        t -= need;
+        z = pz;
+        t -= need + 0.05;
         wait = p.wait ?? 0;
         i += 1;
       } else {
         const k = (spd * t) / dist;
         x += (p.x - x) * k;
-        z += (p.z - z) * k;
+        z += (pz - z) * k;
         t = 0;
       }
     }
@@ -139,7 +197,9 @@ export class PlayerActor {
     const speed =
       Math.hypot(this.x - ox, this.z - oz) / Math.max(dt, 1e-4);
     const turn = Math.abs(wrapPi(this.facing - of));
-    this.plant = turn > 0.25 ? 0.1 : Math.max(0, this.plant - dt);
+    if (turn > 0.25) {
+      this.plant = Math.max(this.plant, 0.1);
+    }
     this.sync();
     this.driveAnim(dt, live, speed);
   }
@@ -151,23 +211,61 @@ export class PlayerActor {
     }
     if (this.wait > 0) {
       this.wait -= dt;
+      this.coastStop(dt);
       return;
     }
     const p = route[this.idx];
-    const target = { x: p.x, z: p.z };
-    const dist = xzDist(this, target);
+    const target = { x: p.x, z: p.z + this.shiftZ };
     const spd = p.speed ?? 8;
-    const step = spd * dt;
-    if (dist < 0.05 || step >= dist) {
-      this.x = p.x;
-      this.z = p.z;
+    const stop = this.shouldStopAt(this.idx);
+    if (this.steer(target, dt, spd, stop)) {
       this.wait = p.wait ?? 0;
       this.idx += 1;
-      return;
     }
-    this.x += ((p.x - this.x) / dist) * step;
-    this.z += ((p.z - this.z) / dist) * step;
-    this.facing = Math.atan2(p.x - this.x, p.z - this.z);
+  }
+
+  /**
+   * Accelerate toward `to`. Returns true when close enough
+   * to treat as arrived — does not teleport onto the point.
+   * `stop` eases speed near the target so they do not orbit.
+   */
+  steer(
+    to: Vec2,
+    dt: number,
+    maxSpeed: number,
+    stop = true
+  ): boolean {
+    const dist = xzDist(this, to);
+    const hit = stop ? ARRIVED : FLOW_HIT;
+    if (dist < 1e-4) {
+      if (stop) {
+        this.coastStop(dt);
+      }
+      return true;
+    }
+    const desired = Math.atan2(to.x - this.x, to.z - this.z);
+    const cap = stop ? arriveCap(maxSpeed, dist) : maxSpeed;
+    this.applyInertia(desired, dt, cap, maxSpeed);
+    return dist < hit;
+  }
+
+  /** Break off the playbook route and run to a spot. */
+  chase(to: Vec2, dt: number, speed: number): void {
+    this.chasing = true;
+    this.wait = 0;
+    this.steer(to, dt, speed, false);
+    this.pumpRun(dt, speed);
+    this.sync();
+  }
+
+  /** Run straight upfield after the catch. */
+  advance(dt: number, speed: number): void {
+    this.chasing = true;
+    this.applyInertia(0, dt, speed, speed);
+    if (!this.tickHold(dt)) {
+      this.pumpRun(dt, speed);
+    }
+    this.sync();
   }
 
   private driveAnim(
@@ -175,6 +273,9 @@ export class PlayerActor {
     live: boolean,
     speed: number
   ): void {
+    if (this.tickHold(dt)) {
+      return;
+    }
     const pos = this.def.pos;
     if (this.shouldHitch(live, speed)) {
       applyHitch(this.rig);
@@ -198,11 +299,25 @@ export class PlayerActor {
     this.setAnim(kind, this.gait, speed);
   }
 
+  private tickHold(dt: number): boolean {
+    if (!this.holdKind || this.holdLeft <= 0) {
+      this.holdKind = null;
+      return false;
+    }
+    this.holdLeft -= dt;
+    const u = 1 - this.holdLeft / Math.max(this.holdDur, 1e-3);
+    poseRig(this.rig, this.holdKind, u, 0);
+    if (this.holdLeft <= 0) {
+      this.holdKind = null;
+    }
+    return true;
+  }
+
   private shouldHitch(live: boolean, speed: number): boolean {
     if (!live || !isSkill(this.def.pos)) {
       return false;
     }
-    if (this.def.pos === 'QB') {
+    if (this.def.pos === 'QB' || this.chasing) {
       return false;
     }
     return this.wait > 0 || speed < 0.45;
@@ -224,6 +339,86 @@ export class PlayerActor {
     this.mesh.position.y = 0;
     this.mesh.rotation.y = this.facing;
   }
+
+  /** Hitch / duplicate waypoint: brake in instead of flowing. */
+  private shouldStopAt(idx: number): boolean {
+    const route = this.def.route;
+    if (!route) {
+      return false;
+    }
+    const p = route[idx];
+    if ((p.wait ?? 0) > 0.02) {
+      return true;
+    }
+    if (idx + 1 >= route.length) {
+      return false;
+    }
+    const n = route[idx + 1];
+    return Math.hypot(n.x - p.x, n.z - p.z) < 0.4;
+  }
+
+  /** Brake along current velocity; used on hitches. */
+  private coastStop(dt: number): void {
+    this.plant = Math.max(0, this.plant - dt);
+    const speed = Math.hypot(this.vx, this.vz);
+    if (speed < MIN_SPD) {
+      this.vx = 0;
+      this.vz = 0;
+      return;
+    }
+    const next = Math.max(0, speed - BRAKE * dt);
+    const k = next / speed;
+    this.vx *= k;
+    this.vz *= k;
+    this.x += this.vx * dt;
+    this.z += this.vz * dt;
+  }
+
+  private pumpRun(dt: number, speed: number): void {
+    const moved = Math.hypot(this.vx, this.vz);
+    const stride = this.plant > 0 ? 0.4 : 1;
+    const rate = this.plant > 0 ? 0.45 : 1;
+    this.gait += dt * Math.max(moved, speed) * 3.2 * rate;
+    applyRun(this.rig, this.gait, stride);
+  }
+
+  /**
+   * Drive vx/vz along current heading. Plant (brake, then
+   * turn) on sharp cuts. Facing lags toward velocity.
+   */
+  private applyInertia(
+    desired: number,
+    dt: number,
+    cap: number,
+    maxSpeed: number
+  ): void {
+    this.plant = Math.max(0, this.plant - dt);
+    let speed = Math.hypot(this.vx, this.vz);
+    let heading = speed > MIN_SPD
+      ? Math.atan2(this.vx, this.vz)
+      : desired;
+    const err = wrapPi(desired - heading);
+    const plantCut =
+      Math.abs(err) > PLANT_ANG && speed > PLANT_SPD;
+    if (plantCut) {
+      this.plant = Math.max(this.plant, PLANT_T);
+      speed = Math.max(0, speed - BRAKE * dt);
+    } else {
+      heading = headingLerp(heading, desired, TURN * dt);
+      speed = accelSpeed(speed, cap, dt);
+      speed = cutSpeed(speed, heading, desired, maxSpeed);
+    }
+    speed = Math.min(speed, maxSpeed);
+    this.vx = Math.sin(heading) * speed;
+    this.vz = Math.cos(heading) * speed;
+    this.x += this.vx * dt;
+    this.z += this.vz * dt;
+    this.facing = headingLerp(
+      this.facing,
+      heading,
+      TURN * dt
+    );
+  }
 }
 
 /** Line-play helper: call after PlayerActor.update each frame. */
@@ -237,13 +432,10 @@ export function setAnim(
 }
 
 export function handPos(p: PlayerActor): THREE.Vector3 {
-  const fx = Math.sin(p.facing);
-  const fz = Math.cos(p.facing);
-  return new THREE.Vector3(
-    p.x + fx * 0.35,
-    1.55,
-    p.z + fz * 0.35
-  );
+  p.mesh.updateMatrixWorld(true);
+  const v = new THREE.Vector3();
+  p.rig.rightHand.getWorldPosition(v);
+  return v;
 }
 
 function autoKind(
@@ -270,13 +462,63 @@ function isSkill(pos: Pos): boolean {
   return pos !== 'OL' && pos !== 'DL';
 }
 
-function wrapPi(a: number): number {
-  let d = a;
-  while (d > Math.PI) {
-    d -= Math.PI * 2;
+function namePlate(def: PlayerDef): THREE.Sprite {
+  const c = document.createElement('canvas');
+  c.width = 160;
+  c.height = 40;
+  const ctx = c.getContext('2d');
+  if (ctx) {
+    ctx.fillStyle = 'rgba(11, 29, 54, 0.78)';
+    ctx.fillRect(0, 0, 160, 40);
+    ctx.fillStyle = '#e8c547';
+    ctx.font = 'bold 22px Barlow Condensed, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const tag = `${def.number} ${def.label}`;
+    ctx.fillText(tag, 80, 21);
   }
-  while (d < -Math.PI) {
-    d += Math.PI * 2;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthWrite: false
+  });
+  const s = new THREE.Sprite(mat);
+  s.position.set(0, 2.72, 0);
+  s.scale.set(1.35, 0.34, 1);
+  s.center.set(0.5, 0);
+  return s;
+}
+
+function arriveCap(maxSpeed: number, dist: number): number {
+  if (dist >= ARRIVE_R) {
+    return maxSpeed;
   }
-  return d;
+  return maxSpeed * (dist / ARRIVE_R);
+}
+
+function accelSpeed(
+  speed: number,
+  cap: number,
+  dt: number
+): number {
+  if (speed < cap) {
+    return Math.min(cap, speed + ACCEL * dt);
+  }
+  return Math.max(cap, speed - BRAKE * dt);
+}
+
+function cutSpeed(
+  speed: number,
+  heading: number,
+  desired: number,
+  maxSpeed: number
+): number {
+  const dot =
+    Math.sin(heading) * Math.sin(desired) +
+    Math.cos(heading) * Math.cos(desired);
+  // Cap, not a per-frame multiply — 60 Hz would freeze them.
+  const cut = Math.max(CUT_MIN, dot);
+  return Math.min(speed, maxSpeed * cut);
 }

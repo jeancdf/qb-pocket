@@ -1,4 +1,5 @@
 import type { CoverGrade } from './types';
+import type { OffPlay } from './plays';
 
 export interface HudRow {
   id: string;
@@ -15,6 +16,22 @@ export class Hud {
   private snapBtn: HTMLButtonElement;
   private toastEl: HTMLElement;
   private pocketEl: HTMLElement;
+  private downEl: HTMLElement;
+  private playEl: HTMLElement;
+  private yardsEl: HTMLElement;
+  private playbook: HTMLElement;
+  private playBar: HTMLElement;
+  private audibles: HTMLElement;
+  private coverEl: HTMLElement;
+  private titleEl: HTMLElement;
+  private playNameEl: HTMLElement;
+  private resultEl: HTMLElement;
+  private resultKick: HTMLElement;
+  private resultTitle: HTMLElement;
+  private hintEl: HTMLElement;
+  private homeEl: HTMLElement;
+  private awayEl: HTMLElement;
+  private bookOpen = false;
 
   constructor() {
     this.list = el('receiver-list');
@@ -22,6 +39,36 @@ export class Hud {
     this.snapBtn = el('snap-btn') as HTMLButtonElement;
     this.toastEl = el('toast');
     this.pocketEl = el('pocket');
+    this.downEl = el('down-line');
+    this.playEl = el('play-chip');
+    this.yardsEl = el('yards-chip');
+    this.playbook = el('hud');
+    this.playBar = el('play-bar');
+    this.audibles = el('audibles');
+    this.coverEl = el('cover-call');
+    this.titleEl = el('play-title');
+    this.playNameEl = el('play-name');
+    this.resultEl = el('result');
+    this.resultKick = el('result-kicker');
+    this.resultTitle = el('result-title');
+    this.hintEl = el('read-hint');
+    this.homeEl = el('home-score');
+    this.awayEl = el('away-score');
+    this.playbook.hidden = true;
+  }
+
+  togglePlaybook(): void {
+    this.bookOpen = !this.bookOpen;
+    this.playbook.hidden = !this.bookOpen;
+  }
+
+  hidePlaybook(): void {
+    this.bookOpen = false;
+    this.playbook.hidden = true;
+  }
+
+  setLiveChrome(show: boolean): void {
+    this.playBar.classList.toggle('is-away', !show);
   }
 
   setStatus(text: string): void {
@@ -54,6 +101,63 @@ export class Hud {
     for (const row of rows) {
       this.list.append(rowNode(row));
     }
+  }
+
+  setDrive(line: string, play: string, yards: number): void {
+    this.downEl.textContent = line;
+    this.playEl.textContent = play;
+    this.yardsEl.textContent = `${yards} YDS`;
+  }
+
+  setScore(home: number, away: number): void {
+    this.homeEl.textContent = String(home);
+    this.awayEl.textContent = String(away);
+  }
+
+  setRead(text: string, show: boolean): void {
+    this.hintEl.textContent = text;
+    this.hintEl.classList.toggle('is-away', !show);
+  }
+
+  setCall(
+    plays: OffPlay[],
+    idx: number,
+    cover: string,
+    presnap: boolean
+  ): void {
+    this.coverEl.textContent = cover;
+    const play = plays[idx];
+    if (play) {
+      this.titleEl.textContent = play.form;
+      this.playNameEl.textContent = `Play: ${play.name}`;
+    }
+    this.audibles.classList.toggle('is-away', !presnap);
+    this.audibles.replaceChildren();
+    plays.forEach((p, i) => {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.idx = String(i);
+      btn.classList.toggle('is-on', i === idx);
+      btn.append(`${i + 1} ${p.name}`);
+      const beat = document.createElement('span');
+      beat.className = 'beat';
+      beat.textContent = `vs ${p.beat}`;
+      btn.append(beat);
+      this.audibles.append(btn);
+    });
+  }
+
+  setResult(over: 'win' | 'loss' | null): void {
+    if (!over) {
+      this.resultEl.hidden = true;
+      return;
+    }
+    this.resultEl.hidden = false;
+    this.resultEl.classList.toggle('is-bad', over === 'loss');
+    this.resultKick.textContent =
+      over === 'win' ? 'TOUCHDOWN' : 'TURNOVER ON DOWNS';
+    this.resultTitle.textContent =
+      over === 'win' ? 'YOU WIN' : 'DRIVE OVER';
   }
 }
 

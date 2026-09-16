@@ -9,6 +9,9 @@ export interface TeamMats {
   skin: THREE.MeshStandardMaterial;
   dark: THREE.MeshStandardMaterial;
   stripe: THREE.MeshStandardMaterial;
+  metal: THREE.MeshStandardMaterial;
+  glove: THREE.MeshStandardMaterial;
+  visor: THREE.MeshStandardMaterial;
 }
 
 export function makeTeamMats(): Record<Side, TeamMats> {
@@ -29,8 +32,21 @@ function kit(
     helmet: std(helmet, 0.28, 0.45),
     skin: std(COLORS.skin, 0.62, 0),
     dark: std(0x111111, 0.5, 0.1),
-    stripe: std(COLORS.gold, 0.45, 0.2)
+    stripe: std(COLORS.gold, 0.45, 0.2),
+    metal: std(0x9aa4b0, 0.26, 0.84),
+    glove: std(0x1b1b1b, 0.74, 0.04),
+    visor: visorMat()
   };
+}
+
+function visorMat(): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({
+    color: 0x081018,
+    roughness: 0.14,
+    metalness: 0.68,
+    transparent: true,
+    opacity: 0.5
+  });
 }
 
 function std(
@@ -55,12 +71,21 @@ export function numberTexture(
   c.height = 64;
   const ctx = c.getContext('2d');
   if (ctx) {
-    ctx.fillStyle = bg;
-    ctx.fillRect(0, 0, 64, 64);
-    ctx.fillStyle = fg;
+    if (bg !== 'none') {
+      ctx.fillStyle = bg;
+      ctx.fillRect(0, 0, 64, 64);
+    } else {
+      ctx.clearRect(0, 0, 64, 64);
+    }
     ctx.font = 'bold 36px Barlow Condensed, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
+    if (bg === 'none') {
+      ctx.lineWidth = 6;
+      ctx.strokeStyle = fg === '#e8c547' ? '#081828' : '#f4f7fa';
+      ctx.strokeText(String(n), 32, 34);
+    }
+    ctx.fillStyle = fg;
     ctx.fillText(String(n), 32, 34);
   }
   const tex = new THREE.CanvasTexture(c);

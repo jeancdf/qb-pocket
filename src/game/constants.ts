@@ -6,18 +6,29 @@ export const HALF_W = FIELD_WID / 2;
 export const HALF_L = FIELD_LEN / 2;
 export const HASH = 3.083;
 
-/** Line of scrimmage: offense's 40. */
+/** Playbook is authored at own 40 (z = -10). */
 export const LOS_Z = -10;
+/** North goal line the offense attacks. */
+export const GOAL_Z = 50;
+export const BACK_GOAL_Z = -50;
+/** Opening spot: own 10. Goal is 90 yards away (z = 50). */
+export const DRIVE_START_Z = -40;
 
 export const GRAVITY = 10.73;
 export const BALL_MASS = 0.41;
 export const BALL_DRAG = 0.006;
-export const THROW_SPEED = 22;
+/** ~4.2× a WR at 9 yd/s; camera-feel above NFL 24–30 yd/s. */
+export const THROW_SPEED = 38;
 export const CATCH_RADIUS = 1.85;
 export const OPEN_YARDS = 4.4;
 export const WINDOW_YARDS = 2.7;
 export const SACK_TIME = 4.8;
 export const SACK_RANGE = 1.2;
+export const YAC_SPEED = 8.6;
+export const YAC_TIME = 2.85;
+export const TACKLE_RANGE = 1.42;
+export const CATCH_HEIGHT_MIN = 0.45;
+export const CATCH_HEIGHT_MAX = 2.85;
 
 export const COLORS = {
   grassA: 0x2f7a3a,

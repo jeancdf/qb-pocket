@@ -1,20 +1,26 @@
 import * as THREE from 'three';
 import {
   COLORS,
+  DRIVE_START_Z,
   ENDZONE,
   FIELD_LEN,
   FIELD_WID,
   HALF_L,
   HALF_W,
-  HASH,
-  LOS_Z
+  HASH
 } from './constants';
+
+export interface FieldSticks {
+  field: THREE.Mesh;
+  los: THREE.Mesh;
+  fd: THREE.Mesh;
+}
 
 const PX = 16;
 const CW = Math.round(FIELD_WID * PX);
 const CH = Math.round(FIELD_LEN * PX);
 
-export function buildWorld(scene: THREE.Scene): void {
+export function buildWorld(scene: THREE.Scene): FieldSticks {
   const dirt = new THREE.Mesh(
     new THREE.PlaneGeometry(90, 160),
     new THREE.MeshStandardMaterial({
@@ -27,12 +33,16 @@ export function buildWorld(scene: THREE.Scene): void {
   dirt.receiveShadow = true;
   scene.add(dirt);
   const field = makeField();
+  const fieldMat = field.material as THREE.MeshStandardMaterial;
+  fieldMat.side = THREE.DoubleSide;
   scene.add(field);
-  scene.add(yardMarker(LOS_Z, 0xf5d76e, 0.04));
-  scene.add(yardMarker(LOS_Z + 7, 0xf29b3a, 0.05));
+  const los = yardMarker(DRIVE_START_Z, 0xf5d76e, 0.04);
+  const fd = yardMarker(DRIVE_START_Z + 10, 0xf29b3a, 0.05);
+  scene.add(los, fd);
   addGoalPosts(scene);
   addStands(scene);
   addTowers(scene);
+  return { field, los, fd };
 }
 
 function makeField(): THREE.Mesh {

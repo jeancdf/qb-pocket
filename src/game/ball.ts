@@ -17,7 +17,7 @@ export class Football {
     this.inAir = false;
     this.vel.set(0, 0, 0);
     parent.add(this.mesh);
-    this.mesh.position.set(0.32, 1.12, 0.28);
+    this.mesh.position.set(0.01, -0.05, 0.02);
     this.mesh.rotation.set(0.4, 0.2, 1.2);
   }
 
@@ -66,7 +66,7 @@ export class Football {
       }
     }
     this.mesh.position.copy(this.pos);
-    this.mesh.rotateX(spd * dt * 0.35);
+    this.mesh.rotateX(spd * dt * 0.55);
   }
 }
 
@@ -75,9 +75,15 @@ export function ballisticVel(
   to: THREE.Vector3,
   time: number
 ): THREE.Vector3 {
-  const v = to.clone().sub(from).divideScalar(time);
-  v.y += 0.5 * GRAVITY * time;
-  return v;
+  // Vacuum displacement plus gravity drop. Inverse quadratic
+  // drag so Football.update still reaches `to` at `time`.
+  const disp = to.clone().sub(from);
+  disp.y += 0.5 * GRAVITY * time * time;
+  const d = disp.length();
+  const kd = BALL_DRAG * d;
+  const scale =
+    kd < 1e-5 ? 1 / time : (Math.exp(kd) - 1) / (kd * time);
+  return disp.multiplyScalar(scale);
 }
 
 function buildBall(): THREE.Group {

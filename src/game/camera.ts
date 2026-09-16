@@ -5,9 +5,9 @@ import { clamp, lerp } from './math';
 export type CamPhase = 'presnap' | 'play' | 'throw' | 'dead';
 
 const FOV = 48;
-const HEIGHT = 23;
-const BACK = 11;
-const LOOK_AHEAD = 6;
+const HEIGHT = 18;
+const BACK = 8.5;
+const LOOK_AHEAD = 7.4;
 const LOOK_Y = 0.8;
 const PLAY_LIFT = 1.1;
 const PLAY_CREEP = 1.6;
@@ -16,7 +16,6 @@ const PEEK_MAX = 1.2;
 const ZOOM_MIN = 0.72;
 const ZOOM_MAX = 1.38;
 const FOLLOW = 1.35;
-const QB_HOME = LOS_Z - 5;
 
 export class MaddenCamera {
   private readonly cam: THREE.PerspectiveCamera;
@@ -27,6 +26,7 @@ export class MaddenCamera {
   private peekX = 0;
   private creep = 0;
   private lift = 0;
+  private losZ = LOS_Z;
   private attached = false;
 
   constructor(
@@ -50,6 +50,10 @@ export class MaddenCamera {
     });
   }
 
+  setLos(z: number): void {
+    this.losZ = z;
+  }
+
   setPhase(phase: CamPhase): void {
     this.phase = phase;
     if (phase === 'presnap') {
@@ -65,7 +69,8 @@ export class MaddenCamera {
     }
     const k = 1 - Math.exp(-dt * FOLLOW);
     const extra = this.phase === 'throw' ? 1.4 : 0;
-    const up = clamp(qbZ - QB_HOME, -1.5, 5) * 0.35;
+    const home = this.losZ - 5;
+    const up = clamp(qbZ - home, -1.5, 5) * 0.35;
     const goal = clamp(PLAY_CREEP + extra + up, 0, 5.5);
     this.creep = lerp(this.creep, goal, k);
     this.lift = lerp(this.lift, PLAY_LIFT, k);
@@ -96,7 +101,7 @@ export class MaddenCamera {
   private writePose(): void {
     const yOff = HEIGHT + this.lift - LOOK_Y;
     const zOff = -BACK - LOOK_AHEAD;
-    const lookZ = LOS_Z + LOOK_AHEAD + this.creep;
+    const lookZ = this.losZ + LOOK_AHEAD + this.creep;
     this.look.set(this.peekX, LOOK_Y, lookZ);
     this.cam.position.set(
       this.peekX,
