@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>QB Pocket — Smash</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;700;800&family=Barlow:wght@400;600&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas"></canvas>
+
+      <aside id="hud" class="hud">
+        <header class="hud__top">
+          <div>
+            <p class="hud__kicker">3rd &amp; 7 · Own 40</p>
+            <h1>GUN TRIPS RT</h1>
+            <p class="hud__play">Play: Smash</p>
+          </div>
+          <div class="hud__score">
+            <span>HOME 17</span>
+            <span>AWAY 14</span>
+          </div>
+        </header>
+
+        <section class="hud__read">
+          <p class="hud__label">Progression</p>
+          <ol>
+            <li>Hitch (Z) — hot vs press</li>
+            <li>Corner (slot) — Cover 3 beater</li>
+            <li>Go (X) — if CB sits</li>
+            <li>Checkdown RB / TE flat</li>
+          </ol>
+        </section>
+
+        <section>
+          <p class="hud__label">Eligible receivers</p>
+          <ul id="receiver-list" class="receivers"></ul>
+        </section>
+
+        <p id="pocket" class="hud__pocket"></p>
+        <p id="status" class="hud__status">
+          Pre-snap. Hit SNAP, then throw to the open man.
+        </p>
+
+        <div class="hud__actions">
+          <button id="snap-btn" type="button">SNAP</button>
+          <button id="reset-btn" type="button" class="ghost">RESET</button>
+        </div>
+
+        <p class="hud__help">
+          Space = snap · 1–5 = throw · click a receiver ·
+          scroll to zoom
+        </p>
+      </aside>
+
+      <div id="toast" class="toast" hidden></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

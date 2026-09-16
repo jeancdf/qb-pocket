@@ -1,0 +1,241 @@
+:root {
+  --navy: #0b1d36;
+  --navy-2: #123056;
+  --gold: #e8c547;
+  --grass: #1f4d28;
+  --paper: #f4efe4;
+  --danger: #e35d5d;
+  --open: #3dd68c;
+  --window: #e8c547;
+  --ink: #d7e4f5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  position: relative;
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #071018;
+  color: var(--ink);
+  font-family: Barlow, system-ui, sans-serif;
+}
+
+#game-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.hud {
+  position: absolute;
+  z-index: 5;
+  top: 18px;
+  left: 18px;
+  width: min(340px, calc(100vw - 36px));
+  padding: 18px 18px 14px;
+  border: 1px solid rgba(232, 197, 71, 0.28);
+  background: linear-gradient(
+    180deg,
+    rgba(11, 29, 54, 0.92),
+    rgba(7, 16, 24, 0.86)
+  );
+  backdrop-filter: blur(10px);
+  box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+}
+
+.hud__top {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
+
+h1 {
+  margin: 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 34px;
+  letter-spacing: 0.04em;
+  line-height: 0.95;
+}
+
+.hud__kicker,
+.hud__label,
+.hud__help {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 11px;
+  color: var(--gold);
+}
+
+.hud__play {
+  margin: 6px 0 0;
+  font-weight: 600;
+}
+
+.hud__score {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.hud__read {
+  margin: 14px 0;
+}
+
+.hud__read ol {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.receivers {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.receivers li {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  gap: 8px;
+  align-items: center;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+}
+
+.receivers li:hover,
+.receivers li.is-hot {
+  border-color: var(--gold);
+}
+
+.receivers .num {
+  font-family: "Barlow Condensed", sans-serif;
+  font-weight: 800;
+  font-size: 18px;
+}
+
+.badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 3px 6px;
+}
+
+.badge.open {
+  color: #062214;
+  background: var(--open);
+}
+
+.badge.window {
+  color: #2b2104;
+  background: var(--window);
+}
+
+.badge.covered,
+.badge.idle {
+  color: #fff;
+  background: #3a4658;
+}
+
+.badge.covered {
+  background: var(--danger);
+}
+
+.hud__pocket {
+  margin: 12px 0 0;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--gold);
+  min-height: 1.2em;
+}
+
+.hud__status {
+  min-height: 44px;
+  margin: 10px 0 10px;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.hud__actions {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  flex: 1;
+  height: 44px;
+  border: 0;
+  background: var(--gold);
+  color: var(--navy);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+button.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.hud__help {
+  margin-top: 10px;
+  letter-spacing: 0.08em;
+  color: rgba(215, 228, 245, 0.7);
+}
+
+.toast {
+  position: absolute;
+  left: 50%;
+  top: 18%;
+  transform: translateX(-50%);
+  padding: 14px 28px;
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 42px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  color: var(--navy);
+  background: var(--gold);
+  pointer-events: none;
+}
+
+.toast.is-bad {
+  background: var(--danger);
+  color: #fff;
+}
+
+@media (max-width: 720px) {
+  .hud {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+  }
+}
