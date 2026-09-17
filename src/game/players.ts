@@ -284,6 +284,16 @@ export class PlayerActor {
     this.sync();
   }
 
+  /** Bleed momentum when a controlled runner releases the stick. */
+  coast(dt: number): void {
+    this.coastStop(dt);
+    const speed = Math.hypot(this.vx, this.vz);
+    if (!this.tickHold(dt) && speed > MIN_SPD) {
+      this.pumpRun(dt, speed);
+    }
+    this.sync();
+  }
+
   /**
    * Transfer running momentum into an articulated fall. The rig
    * remains live while the root tumbles and slides on the turf.

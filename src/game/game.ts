@@ -229,6 +229,10 @@ export class FootballGame {
     }
   }
 
+  controlsQbRun(): boolean {
+    return this.phase === 'yac' && this.carrier === this.qb();
+  }
+
   /** Keyboard / list shortcut: throw near that receiver. */
   throwTo(id: string): void {
     if (this.phase !== 'play') {
@@ -469,6 +473,9 @@ export class FootballGame {
   }
 
   private yacStatus(): string {
+    if (this.controlsQbRun()) {
+      return 'ZQSD/WASD controls the QB all the way to the goal line.';
+    }
     switch (this.jukeState) {
       case 'approach':
         return 'Defender ahead slows YAC. A/Q or D calls the cut.';
@@ -580,11 +587,30 @@ export class FootballGame {
       wr.updateRagdoll(dt);
       return;
     }
+    if (wr === this.qb()) {
+      this.moveQbCarrier(wr, dt);
+      return;
+    }
     if (this.jukeState === 'cut' && this.jukeTarget) {
       wr.chase(this.jukeTarget, dt, this.carrierSpeed(wr));
       return;
     }
     wr.advance(dt, this.carrierSpeed(wr));
+  }
+
+  private moveQbCarrier(qb: PlayerActor, dt: number): void {
+    const length = Math.hypot(this.stickX, this.stickZ);
+    if (length < 0.2) {
+      qb.coast(dt);
+      return;
+    }
+    const x = this.stickX / Math.max(1, length);
+    const z = this.stickZ / Math.max(1, length);
+    const target = {
+      x: qb.x + x * 5,
+      z: qb.z + z * 5
+    };
+    qb.chase(target, dt, YAC_SPEED * 0.94);
   }
 
   private carrierSpeed(wr: PlayerActor): number {
@@ -731,7 +757,7 @@ export class FootballGame {
       this.startTackle(wr, tackler);
       return;
     }
-    if (this.yacT >= YAC_TIME) {
+    if (wr !== this.qb() && this.yacT >= YAC_TIME) {
       this.endYac();
     }
   }
@@ -1074,6 +1100,8 @@ export class FootballGame {
   private startQbRun(): void {
     const qb = this.qb();
     this.prepareYac(qb);
+    this.frontDefender = null;
+    this.jukeState = 'none';
     this.phase = 'yac';
     this.ball.hold(qb.rig.rightHand);
     this.madden.setPhase('throw');
