@@ -2,6 +2,8 @@ import { LOS_Z } from './constants';
 import type { RoutePoint, Vec2 } from './types';
 
 const L = LOS_Z;
+/** Receivers build to speed so route stems read as human, not arcade-fast. */
+const ROUTE_SPEED_SCALE = 0.84;
 
 export interface SkillPack {
   start: Vec2;
@@ -25,7 +27,13 @@ function pack(
   name: string,
   route: RoutePoint[]
 ): SkillPack {
-  return { start: { x, z }, routeName: name, route };
+  const pacedRoute = route.map((point) => ({
+    ...point,
+    speed: point.speed === undefined
+      ? undefined
+      : point.speed * ROUTE_SPEED_SCALE
+  }));
+  return { start: { x, z }, routeName: name, route: pacedRoute };
 }
 
 /** Slot jet across the formation before the snap. */
@@ -44,25 +52,31 @@ export const PLAYS: OffPlay[] = [
     motion: JET,
     skill: {
       wrZ: pack(19.2, L - 0.9, 'Hitch', [
-        { x: 19.2, z: L + 9.2, speed: 8.7 },
-        { x: 19.2, z: L + 9.2, wait: 8, speed: 0.2 }
+        { x: 19.0, z: L + 2.4, speed: 8.5 },
+        { x: 19.1, z: L + 6.8, speed: 8.8 },
+        { x: 18.6, z: L + 5.3, wait: 8, speed: 5.8 }
       ]),
       wrH: pack(8.2, L - 1.05, 'Corner', [
-        { x: 8.2, z: L + 11.5, speed: 8.8 },
-        { x: 18.4, z: L + 22.5, speed: 8.6 }
+        { x: 8.0, z: L + 3.5, speed: 8.6 },
+        { x: 7.7, z: L + 10.8, speed: 8.9 },
+        { x: 10.0, z: L + 13.2, speed: 7.8 },
+        { x: 19.2, z: L + 22.5, speed: 8.6 }
       ]),
       wrX: pack(-18.4, L - 0.9, 'Go', [
-        { x: -18.6, z: L + 12, speed: 9.1 },
-        { x: -19.2, z: L + 38, speed: 9.2 }
+        { x: -19.1, z: L + 3.5, speed: 8.8 },
+        { x: -19.0, z: L + 14.0, speed: 9.2 },
+        { x: -18.3, z: L + 38.0, speed: 9.3 }
       ]),
       te: pack(6.6, L - 0.42, 'Flat', [
-        { x: 10.4, z: L + 1.8, speed: 7.4 },
-        { x: 16.8, z: L + 3.4, speed: 7.6 }
+        { x: 7.3, z: L + 0.8, speed: 7.1 },
+        { x: 11.6, z: L + 2.2, speed: 7.5 },
+        { x: 17.8, z: L + 3.2, speed: 7.7 }
       ]),
       rb: pack(-4.6, L - 6.1, 'Flare', [
         { x: -4.6, z: L - 6.1, wait: 0.55, speed: 8.4 },
-        { x: -9.5, z: L - 1.4, speed: 8.4 },
-        { x: -15.5, z: L + 1.6, speed: 8.2 }
+        { x: -6.1, z: L - 4.7, speed: 7.5 },
+        { x: -10.4, z: L - 0.9, speed: 8.2 },
+        { x: -16.2, z: L + 2.4, speed: 8.3 }
       ])
     }
   },
@@ -75,24 +89,30 @@ export const PLAYS: OffPlay[] = [
     motion: JET,
     skill: {
       wrZ: pack(19.2, L - 0.9, 'Slant', [
-        { x: 16.2, z: L + 2.8, speed: 8.9 },
-        { x: 7.4, z: L + 10.6, speed: 8.5 }
+        { x: 19.7, z: L + 1.2, speed: 8.5 },
+        { x: 16.8, z: L + 3.3, speed: 8.3 },
+        { x: 7.0, z: L + 11.2, speed: 8.7 }
       ]),
       wrH: pack(8.2, L - 1.05, 'Slant', [
-        { x: 4.8, z: L + 3.2, speed: 8.6 },
-        { x: -3.6, z: L + 10.2, speed: 8.3 }
+        { x: 8.5, z: L + 1.3, speed: 8.3 },
+        { x: 5.6, z: L + 3.9, speed: 8.2 },
+        { x: -3.2, z: L + 11.2, speed: 8.5 }
       ]),
       wrX: pack(-18.4, L - 0.9, 'Slant', [
-        { x: -15.2, z: L + 2.8, speed: 8.9 },
-        { x: -6.6, z: L + 10.6, speed: 8.5 }
+        { x: -19.0, z: L + 1.2, speed: 8.5 },
+        { x: -16.1, z: L + 3.5, speed: 8.3 },
+        { x: -6.2, z: L + 11.4, speed: 8.7 }
       ]),
       te: pack(6.6, L - 0.42, 'Drag', [
-        { x: 1.4, z: L + 5.2, speed: 7.6 },
-        { x: -8.5, z: L + 6.4, speed: 7.5 }
+        { x: 6.7, z: L + 1.6, speed: 7.3 },
+        { x: 4.7, z: L + 3.8, speed: 7.2 },
+        { x: -9.5, z: L + 5.8, speed: 7.7 }
       ]),
       rb: pack(-4.6, L - 6.1, 'Swing', [
-        { x: -10.2, z: L - 1.2, speed: 8.2 },
-        { x: -16.4, z: L + 1.4, speed: 8.1 }
+        { x: -4.6, z: L - 6.1, wait: 0.35, speed: 8.0 },
+        { x: -6.2, z: L - 4.8, speed: 7.4 },
+        { x: -11.2, z: L - 0.5, speed: 8.1 },
+        { x: -17.0, z: L + 1.8, speed: 8.2 }
       ])
     }
   },
@@ -105,24 +125,32 @@ export const PLAYS: OffPlay[] = [
     motion: JET,
     skill: {
       wrZ: pack(19.2, L - 0.9, 'Go', [
-        { x: 19.4, z: L + 14, speed: 9.0 },
-        { x: 19.6, z: L + 36, speed: 9.1 }
+        { x: 19.8, z: L + 3.6, speed: 8.8 },
+        { x: 19.6, z: L + 15.0, speed: 9.2 },
+        { x: 18.9, z: L + 37.0, speed: 9.3 }
       ]),
       wrH: pack(8.2, L - 1.05, 'Out', [
-        { x: 8.2, z: L + 12.2, speed: 8.6 },
-        { x: 18.6, z: L + 12.4, speed: 8.4 }
+        { x: 8.0, z: L + 3.4, speed: 8.4 },
+        { x: 7.6, z: L + 11.8, speed: 8.8 },
+        { x: 10.4, z: L + 12.2, speed: 7.4 },
+        { x: 19.0, z: L + 12.3, speed: 8.4 }
       ]),
       wrX: pack(-18.4, L - 0.9, 'Comeback', [
-        { x: -18.6, z: L + 14.5, speed: 8.8 },
-        { x: -18.4, z: L + 10.2, wait: 6, speed: 6.4 }
+        { x: -19.1, z: L + 3.2, speed: 8.6 },
+        { x: -18.6, z: L + 15.5, speed: 9.0 },
+        { x: -20.0, z: L + 11.8, wait: 6, speed: 6.4 }
       ]),
       te: pack(6.6, L - 0.42, 'Corner', [
-        { x: 8.8, z: L + 10.5, speed: 8.2 },
-        { x: 16.8, z: L + 20.5, speed: 8.1 }
+        { x: 6.8, z: L + 3.2, speed: 7.7 },
+        { x: 7.8, z: L + 9.0, speed: 8.1 },
+        { x: 10.5, z: L + 12.0, speed: 7.3 },
+        { x: 17.5, z: L + 20.5, speed: 8.1 }
       ]),
       rb: pack(-4.6, L - 6.1, 'Check', [
-        { x: -8.2, z: L - 1.6, speed: 7.8 },
-        { x: -12.4, z: L + 0.8, speed: 7.6 }
+        { x: -4.6, z: L - 6.1, wait: 0.45, speed: 7.8 },
+        { x: -5.5, z: L - 4.5, speed: 7.2 },
+        { x: -9.0, z: L - 0.8, speed: 7.8 },
+        { x: -13.0, z: L + 1.0, speed: 7.7 }
       ])
     }
   },
@@ -134,25 +162,33 @@ export const PLAYS: OffPlay[] = [
     motionId: 'wrH',
     motion: JET,
     skill: {
-      wrZ: pack(19.2, L - 0.9, 'Hitch', [
-        { x: 19.2, z: L + 9.2, speed: 8.6 },
-        { x: 19.2, z: L + 9.2, wait: 8, speed: 0.2 }
+      wrZ: pack(19.2, L - 0.9, 'Corner', [
+        { x: 19.8, z: L + 3.0, speed: 8.6 },
+        { x: 19.5, z: L + 11.0, speed: 9.0 },
+        { x: 24.2, z: L + 19.0, speed: 8.7 }
       ]),
-      wrH: pack(8.2, L - 1.05, 'Cross', [
-        { x: 8.2, z: L + 6.2, speed: 8.4 },
-        { x: -8.8, z: L + 8.4, speed: 8.3 }
+      wrH: pack(8.2, L - 1.05, 'Mesh', [
+        { x: 8.4, z: L + 1.8, speed: 8.2 },
+        { x: 6.2, z: L + 3.7, speed: 7.9 },
+        { x: 0.8, z: L + 5.0, speed: 8.1 },
+        { x: -11.5, z: L + 5.8, speed: 8.3 }
       ]),
-      wrX: pack(-18.4, L - 0.9, 'Post', [
-        { x: -18.2, z: L + 14, speed: 9.0 },
-        { x: -8.4, z: L + 28, speed: 8.9 }
+      wrX: pack(-18.4, L - 0.9, 'Mesh', [
+        { x: -18.8, z: L + 1.5, speed: 8.4 },
+        { x: -15.8, z: L + 4.6, speed: 8.1 },
+        { x: -2.0, z: L + 6.3, speed: 8.5 },
+        { x: 12.0, z: L + 6.9, speed: 8.5 }
       ]),
-      te: pack(6.6, L - 0.42, 'Cross', [
-        { x: 6.4, z: L + 5.4, speed: 7.8 },
-        { x: 14.6, z: L + 7.6, speed: 7.7 }
+      te: pack(6.6, L - 0.42, 'Sit', [
+        { x: 6.4, z: L + 2.6, speed: 7.5 },
+        { x: 4.5, z: L + 6.5, speed: 7.6 },
+        { x: 2.8, z: L + 7.8, wait: 8, speed: 5.6 }
       ]),
       rb: pack(-4.6, L - 6.1, 'Leak', [
-        { x: -4.6, z: L - 6.1, wait: 0.7, speed: 8.0 },
-        { x: 2.2, z: L + 4.8, speed: 8.1 }
+        { x: -4.6, z: L - 6.1, wait: 0.45, speed: 7.8 },
+        { x: -2.2, z: L - 3.8, speed: 7.5 },
+        { x: 5.5, z: L + 1.8, speed: 8.1 },
+        { x: 9.5, z: L + 7.5, speed: 8.2 }
       ])
     }
   }
