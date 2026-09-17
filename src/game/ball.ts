@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { BALL_DRAG, COLORS, GRAVITY } from './constants';
 
 const PASS_FLIGHT_TIME_SCALE = 2.1;
-const BALL_VISUAL_SCALE = 1.8;
+const BALL_VISUAL_SCALE = 3;
 const FLIGHT_SIMULATION_STEP = 1 / 120;
 const VELOCITY_CORRECTION_PASSES = 4;
 
