@@ -69,6 +69,7 @@ export function buildRig(
   def: PlayerDef,
   mats: TeamMats
 ): { root: THREE.Group; rig: PlayerRig } {
+  const kit = playerKit(mats, def.number);
   const root = new THREE.Group();
   root.userData.id = def.id;
   root.scale.setScalar(SCALE);
@@ -76,14 +77,14 @@ export function buildRig(
   const pelvis = new THREE.Group();
   pelvis.position.y = HIP;
   root.add(pelvis);
-  addPants(pelvis, mats, bulk);
-  const { torso, neck } = addTorso(pelvis, mats, def, bulk);
+  addPants(pelvis, kit, bulk, def);
+  const { torso, neck } = addTorso(pelvis, kit, def, bulk);
   const ax = bulk ? 0.36 : 0.32;
   const hx = bulk ? 0.14 : 0.12;
-  const left = addArm(pelvis, -ax, mats, bulk);
-  const right = addArm(pelvis, ax, mats, bulk);
-  const lLeg = addLeg(pelvis, -hx, mats, bulk);
-  const rLeg = addLeg(pelvis, hx, mats, bulk);
+  const left = addArm(pelvis, -ax, kit, bulk);
+  const right = addArm(pelvis, ax, kit, bulk);
+  const lLeg = addLeg(pelvis, -hx, kit, bulk);
+  const rLeg = addLeg(pelvis, hx, kit, bulk);
   const rig: PlayerRig = {
     pos: def.pos,
     pelvis,
@@ -107,6 +108,13 @@ export function buildRig(
   addHit(root, def.id);
   applyPose(rig, idlePose(def.pos));
   return { root, rig };
+}
+
+function playerKit(mats: TeamMats, number: number): TeamMats {
+  const tones = [0x5a3524, 0x8d552f, 0xb97850, 0xd49a73];
+  const skin = mats.skin.clone();
+  skin.color.setHex(tones[number % tones.length]);
+  return { ...mats, skin };
 }
 
 export function poseRig(
@@ -530,7 +538,8 @@ function engagePose(t: number): Pose {
 function addPants(
   pelvis: THREE.Group,
   mats: TeamMats,
-  bulk: boolean
+  bulk: boolean,
+  def: PlayerDef
 ): void {
   const hipR = bulk ? 0.125 : 0.105;
   const bowl = capMesh(hipR, 0.18, mats.pants);
@@ -544,7 +553,32 @@ function addPants(
   lHip.position.set(-0.11, -0.02, 0.01);
   const rHip = sphMesh(hr, mats.pants, 10);
   rHip.position.set(0.11, -0.02, 0.01);
-  pelvis.add(bowl, belt, lHip, rHip);
+  pelvis.add(bowl, belt, lHip, rHip, hipPads(mats, bulk));
+  if (def.pos === 'QB') {
+    pelvis.add(qbTowel(mats));
+  }
+}
+
+function hipPads(mats: TeamMats, bulk: boolean): THREE.Group {
+  const pads = new THREE.Group();
+  const x = bulk ? 0.18 : 0.155;
+  for (const side of [-1, 1]) {
+    const pad = sphMesh(bulk ? 0.095 : 0.078, mats.pants, 10);
+    pad.position.set(side * x, -0.055, 0.055);
+    pad.scale.set(0.76, 1.2, 0.55);
+    pads.add(pad);
+  }
+  return pads;
+}
+
+function qbTowel(mats: TeamMats): THREE.Mesh {
+  const towel = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.17, 0.33, 2, 3),
+    mats.stripe
+  );
+  towel.position.set(0, -0.18, -0.12);
+  towel.rotation.x = -0.16;
+  return towel;
 }
 
 function addTorso(
@@ -565,6 +599,7 @@ function addTorso(
   collar.scale.set(1.35, 0.42, 1.05);
   torso.add(collar);
   addPads(torso, mats, bulk);
+  addJerseyTrim(torso, mats, bulk);
   const neck = new THREE.Group();
   neck.position.y = 0.56;
   const neckMesh = capMesh(0.05, 0.1, mats.skin, 8);
@@ -601,6 +636,28 @@ function addPads(
   rPad.position.set(padX, 0.415, 0.02);
   rPad.scale.set(1.16, 0.6, 1.18);
   torso.add(pec, yoke, lPad, rPad);
+}
+
+function addJerseyTrim(
+  torso: THREE.Group,
+  mats: TeamMats,
+  bulk: boolean
+): void {
+  const x = bulk ? 0.18 : 0.15;
+  for (const side of [-1, 1]) {
+    const seam = new THREE.Mesh(
+      new THREE.BoxGeometry(0.028, 0.3, 0.025),
+      mats.stripe
+    );
+    seam.position.set(side * x, 0.25, 0.12);
+    torso.add(seam);
+  }
+  const chest = new THREE.Mesh(
+    new THREE.BoxGeometry(bulk ? 0.36 : 0.31, 0.035, 0.03),
+    mats.stripe
+  );
+  chest.position.set(0, 0.38, 0.135);
+  torso.add(chest);
 }
 
 function addHelmet(neck: THREE.Group, mats: TeamMats): void {
@@ -691,8 +748,13 @@ function addArm(
   const deltoid = sphMesh(bulk ? 0.1 : 0.082, mats.jersey, 10);
   deltoid.position.y = 0.015;
   const upper = hang(ur, UPPER, mats.jersey);
+  const cuff = capMesh(ur * 1.06, 0.045, mats.stripe, 8);
+  cuff.position.y = -UPPER * 0.62;
   const elbow = sphMesh(ur * 1.05, mats.skin, 8);
   elbow.position.y = -UPPER;
+  const elbowPad = sphMesh(ur * 0.82, mats.dark, 8);
+  elbowPad.position.set(0, -UPPER, -ur * 0.62);
+  elbowPad.scale.set(1.08, 0.82, 0.5);
   const fore = new THREE.Group();
   fore.position.y = -UPPER;
   const sleeve = hang(fr * 1.04, FORE * 0.42, mats.jersey);
@@ -703,7 +765,7 @@ function addArm(
   const hand = addHand(mats, bulk, inn);
   hand.position.y = -FORE;
   fore.add(sleeve, forearm, wrist, hand);
-  arm.add(deltoid, upper, elbow, fore);
+  arm.add(deltoid, upper, cuff, elbow, elbowPad, fore);
   pelvis.add(arm);
   return { arm, fore, hand };
 }
@@ -753,8 +815,14 @@ function addLeg(
   thigh.position.set(x, 0, 0);
   const hip = sphMesh(tw * 1.15, mats.pants, 10);
   const tMesh = hang(tw, THIGH, mats.pants);
+  const thighPad = sphMesh(tw * 0.92, mats.stripe, 10);
+  thighPad.position.set(0, -THIGH * 0.48, tw * 0.7);
+  thighPad.scale.set(0.9, 1.45, 0.38);
   const knee = sphMesh(tw * 0.95, mats.pants, 8);
   knee.position.y = -THIGH;
+  const kneePad = sphMesh(tw * 0.8, mats.dark, 8);
+  kneePad.position.set(0, -THIGH, tw * 0.66);
+  kneePad.scale.set(0.92, 1.04, 0.42);
   const shin = new THREE.Group();
   shin.position.y = -THIGH;
   const sMesh = hang(sw, SHIN, mats.pants);
@@ -766,7 +834,7 @@ function addLeg(
   const foot = addShoe(mats, bulk);
   foot.position.y = -SHIN;
   shin.add(sMesh, sock, ankle, foot);
-  thigh.add(hip, tMesh, knee, shin);
+  thigh.add(hip, tMesh, thighPad, knee, kneePad, shin);
   pelvis.add(thigh);
   return { thigh, shin, foot };
 }
@@ -788,8 +856,27 @@ function addShoe(mats: TeamMats, bulk: boolean): THREE.Group {
   const collar = sphMesh(0.038 * s, d, 7);
   collar.position.set(0, -0.028, 0.02);
   collar.scale.set(1.12, 0.72, 1.25);
-  foot.add(heel, mid, toe, collar);
+  foot.add(heel, mid, toe, collar, shoeStuds(d, s));
   return foot;
+}
+
+function shoeStuds(material: THREE.Material, scale: number): THREE.Group {
+  const studs = new THREE.Group();
+  const points: Array<[number, number]> = [
+    [-0.025, -0.02],
+    [0.025, -0.02],
+    [-0.025, 0.09],
+    [0.025, 0.09]
+  ];
+  for (const [x, z] of points) {
+    const stud = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.01, 0.014, 0.025, 6),
+      material
+    );
+    stud.position.set(x * scale, -0.092, z);
+    studs.add(stud);
+  }
+  return studs;
 }
 
 function jerseyNum(def: PlayerDef): THREE.Mesh {
@@ -804,14 +891,23 @@ function jerseyNum(def: PlayerDef): THREE.Mesh {
   return new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.32), mat);
 }
 
-/** Capsule along -Y so the parent origin stays at the top joint. */
+/** Tapered anatomical segment; joint meshes hide the open profile ends. */
 function hang(
   r: number,
   len: number,
   mat: THREE.Material,
   segs = 8
 ): THREE.Mesh {
-  const mesh = capMesh(r, len, mat, segs);
+  const profile = [
+    new THREE.Vector2(r * 0.72, len * 0.5),
+    new THREE.Vector2(r, len * 0.28),
+    new THREE.Vector2(r * 0.94, -len * 0.12),
+    new THREE.Vector2(r * 0.68, -len * 0.5)
+  ];
+  const mesh = new THREE.Mesh(
+    new THREE.LatheGeometry(profile, Math.max(segs, 10)),
+    mat
+  );
   mesh.position.y = -len * 0.5;
   return mesh;
 }
