@@ -9,26 +9,26 @@ export function gradeReceiver(
   defs: PlayerActor[]
 ): CoverGrade {
   let nearest = 99;
+  let closing = 99;
   let lane = 99;
   const a = { x: qb.x, z: qb.z };
-  const b = { x: recv.x, z: recv.z };
+  // Grade the window where the route is heading, not where it was.
+  const target = recv.predict(0.38);
   for (const d of defs) {
     const dist = xzDist(recv, d);
-    if (dist < nearest) {
-      nearest = dist;
-    }
-    const mid = distToSeg(d, a, b);
-    if (mid < lane) {
-      lane = mid;
-    }
+    const close = xzDist(target, d);
+    nearest = Math.min(nearest, dist);
+    closing = Math.min(closing, close);
+    lane = Math.min(lane, distToSeg(d, a, target));
   }
-  if (nearest < WINDOW_YARDS) {
+  if (nearest < WINDOW_YARDS ||
+      closing < WINDOW_YARDS - 0.25) {
     return 'covered';
   }
-  if (lane < 1.6 && nearest < OPEN_YARDS + 1.5) {
+  if (lane < 1.6 && closing < OPEN_YARDS + 1.2) {
     return 'window';
   }
-  if (nearest < OPEN_YARDS) {
+  if (Math.min(nearest, closing) < OPEN_YARDS) {
     return 'window';
   }
   return 'open';
