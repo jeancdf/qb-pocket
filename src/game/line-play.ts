@@ -1,22 +1,14 @@
 /**
  * Post-snap OL/DL: pass sets, bull rush, engage, pocket.
  *
+ * 1–2 DL/LB rushers leave the pile after the snap and chase
+ * the QB (sack pressure). Remaining DL stay blocked so the
+ * pocket still looks like a line, not extra DBs.
+ *
  * players.ts has setAnim but no place/pushOffset. LinePlay
  * writes actor.x/z/facing, plants the mesh, then setAnim.
  * Call update AFTER the player loop so idle auto-anim does
  * not overwrite the pass-set / rush / engage poses.
- *
- * Integration in game.ts:
- *   this.line = new LinePlay(this.byId); // after spawn
- *   this.line.reset();                   // in reset()
- *   for (const p of this.players) {
- *     const isLine =
- *       p.def.pos === 'OL' || p.def.pos === 'DL';
- *     p.update(dt, live && !isLine);
- *   }
- *   this.line.update(dt, live, qb);
- *
- * Skill players and the QB are never moved here.
  *
  * Pairs: lt-lde, lg-ldt, rg-rdt, rt-rde.
  * Center helps the DT with worse leverage (double-team).
@@ -33,6 +25,16 @@ const ENGAGE = 1.35;
 const PAD = 1.16;
 const MAX_SET = 2.2;
 const FIGHT = 0.15;
+const EDGE_RUSH = 3.85;
+const LB_RUSH = 4.35;
+const SPY_SPD = 2.45;
+
+/** Ids CoverPlay skips so rushers are not also dropping. */
+const rushing = new Set<string>();
+
+export function isPassRusher(id: string): boolean {
+  return rushing.has(id);
+}
 
 interface Spec {
   ol: string;
@@ -66,6 +68,7 @@ export class LinePlay {
   private readonly byId: Map<string, PlayerActor>;
   private readonly matches: Match[] = [];
   private readonly center?: PlayerActor;
+  private readonly rushers: PlayerActor[] = [];
   private helpDl?: PlayerActor;
   private t = 0;
   private losZ = LOS_Z;
@@ -76,12 +79,14 @@ export class LinePlay {
     for (const s of SPECS) {
       this.tryAdd(s);
     }
+    this.pickRushers();
   }
 
-  /** Clears locks only. Actors reset from game.ts. */
+  /** Clears locks and picks 1–2 rushers for this snap. */
   reset(): void {
     this.t = 0;
     this.helpDl = undefined;
+    this.pickRushers();
     for (const m of this.matches) {
       m.locked = false;
       m.contained = false;
@@ -107,11 +112,13 @@ export class LinePlay {
     if (left > 0) {
       this.hop(Math.min(dt, left));
     }
+    this.rushQb(dt, qb);
+    this.spyMike(dt, qb);
     if (this.t < HOP_T) {
       this.finishFrame();
       return;
     }
-    this.rushFree(dt, qb);
+    this.rushFree(dt);
     this.tryLock();
     this.drive(dt, qb);
     this.moveCenter(dt);
@@ -120,6 +127,90 @@ export class LinePlay {
     this.keepFront();
     this.wiggle();
     this.finishFrame();
+  }
+
+  /**
+   * Every play: one edge (lde/rde) plus the Mike on about
+   * half of snaps. Always a DE so game.ts sack range still
+   * hits without spawning new actors.
+   */
+  private pickRushers(): void {
+    rushing.clear();
+    this.rushers.length = 0;
+    const edge = Math.random() < 0.5 ? 'lde' : 'rde';
+    this.addRusher(edge);
+    if (Math.random() < 0.55) {
+      this.addRusher('mlb');
+    }
+  }
+
+  private addRusher(id: string): void {
+    const p = this.byId.get(id);
+    if (!p) {
+      return;
+    }
+    rushing.add(id);
+    this.rushers.push(p);
+  }
+
+  /** Unblocked edge / blitzing Mike: contain a beat, then QB. */
+  private rushQb(dt: number, qb: PlayerActor): void {
+    for (const p of this.rushers) {
+      this.rushAtQb(p, dt, qb);
+    }
+  }
+
+  private rushAtQb(
+    p: PlayerActor,
+    dt: number,
+    qb: PlayerActor
+  ): void {
+    const edge = p.def.pos === 'DL';
+    if (this.t < HOP_T && edge) {
+      this.poseRush(p, qb);
+      return;
+    }
+    const spd = edge ? EDGE_RUSH : LB_RUSH;
+    if (this.t < 0.42) {
+      seek(p, this.gate(p, edge), spd, dt);
+    } else {
+      seek(p, qb, spd, dt);
+    }
+    this.poseRush(p, qb);
+  }
+
+  /** Outside flatten for DE; A-gap shoot for the Mike. */
+  private gate(p: PlayerActor, edge: boolean): Vec2 {
+    const out = Math.sign(p.def.start.x) || 1;
+    if (edge) {
+      return { x: p.x + out * 1.05, z: p.z - 0.85 };
+    }
+    return { x: p.x * 0.35, z: p.z - 1.35 };
+  }
+
+  private poseRush(p: PlayerActor, qb: PlayerActor): void {
+    aim(p, qb);
+    plant(p);
+    p.setAnim('rush', this.t, 4);
+  }
+
+  /**
+   * When the Mike is not the 2nd rusher he sits as a spy
+   * instead of dropping into another DB-looking zone.
+   */
+  private spyMike(dt: number, qb: PlayerActor): void {
+    const p = this.byId.get('mlb');
+    if (!p || isPassRusher('mlb')) {
+      return;
+    }
+    const hold = {
+      x: clamp(qb.x * 0.35, -2.8, 2.8),
+      z: this.losZ + 2.1
+    };
+    seek(p, hold, SPY_SPD, dt);
+    aim(p, qb);
+    plant(p);
+    p.setAnim('rush', this.t, 1.1);
   }
 
   private tryAdd(s: Spec): void {
@@ -179,26 +270,26 @@ export class LinePlay {
     this.helpDl = l >= r ? ldt : rdt;
   }
 
-  private rushFree(dt: number, qb: PlayerActor): void {
+  private rushFree(dt: number): void {
     for (const m of this.matches) {
-      this.rushOne(m, dt, qb);
+      this.rushOne(m, dt);
     }
   }
 
-  private rushOne(m: Match, dt: number, qb: PlayerActor): void {
-    if (m.locked) {
+  private rushOne(m: Match, dt: number): void {
+    if (m.locked || isPassRusher(m.dl.def.id)) {
       return;
     }
-    const spd = m.wide ? 4.25 : 3.15;
-    if (!m.contained) {
-      m.contained = seek(m.dl, m.contain, spd, dt);
-      return;
-    }
-    seek(m.dl, qb, spd, dt);
+    // Unused DE/DT stay on their OT so only 1–2 hunters chase.
+    const to = { x: m.ol.x, z: m.ol.z + 0.72 };
+    seek(m.dl, to, 2.15, dt);
   }
 
   private tryLock(): void {
     for (const m of this.matches) {
+      if (isPassRusher(m.dl.def.id)) {
+        continue;
+      }
       const close = xzDist(m.ol, m.dl) < ENGAGE;
       m.locked = m.locked || close;
     }
@@ -211,6 +302,10 @@ export class LinePlay {
   }
 
   private driveOne(m: Match, dt: number, qb: PlayerActor): void {
+    if (isPassRusher(m.dl.def.id)) {
+      setWithout(m, dt);
+      return;
+    }
     if (!m.locked) {
       kickSlide(m, dt);
       return;
@@ -257,6 +352,9 @@ export class LinePlay {
 
   private separate(): void {
     for (const m of this.matches) {
+      if (isPassRusher(m.dl.def.id)) {
+        continue;
+      }
       split(m.ol, m.dl, PAD);
     }
     if (this.center && this.helpDl) {
@@ -266,6 +364,9 @@ export class LinePlay {
 
   private keepFront(): void {
     for (const m of this.matches) {
+      if (isPassRusher(m.dl.def.id)) {
+        continue;
+      }
       holdOl(m);
     }
   }
@@ -278,7 +379,7 @@ export class LinePlay {
   }
 
   private fight(m: Match, t: number): void {
-    if (!m.locked) {
+    if (!m.locked || isPassRusher(m.dl.def.id)) {
       return;
     }
     const w = FIGHT * Math.sin(t + m.seed);
@@ -316,6 +417,14 @@ function kickSlide(m: Match, dt: number): void {
   ol.x = lerp(ol.x, tx, clamp(dt * 4.2, 0, 1));
 }
 
+/** OT whose DE is a free rusher: set in place, do not chase. */
+function setWithout(m: Match, dt: number): void {
+  const ol = m.ol;
+  ol.z -= 1.45 * dt;
+  const home = ol.def.start.x;
+  ol.x = lerp(ol.x, home, clamp(dt * 3.2, 0, 1));
+}
+
 function bull(
   m: Match,
   qb: PlayerActor,
@@ -334,6 +443,12 @@ function bull(
 }
 
 function poseMatch(m: Match, t: number): void {
+  if (isPassRusher(m.dl.def.id)) {
+    m.ol.facing = 0;
+    plant(m.ol);
+    m.ol.setAnim('passSet', t, 2);
+    return;
+  }
   aim(m.ol, m.dl);
   aim(m.dl, m.ol);
   plant(m.ol);
