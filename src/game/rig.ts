@@ -9,7 +9,11 @@ export type AnimKind =
   | 'rush'
   | 'engage'
   | 'throw'
-  | 'catch';
+  | 'catch'
+  | 'juke'
+  | 'stumble'
+  | 'tackle'
+  | 'ragdoll';
 
 export interface PlayerRig {
   pos: Pos;
@@ -124,15 +128,35 @@ export function poseRig(
     applyPose(rig, catchPose());
     return;
   }
+  if (kind === 'juke') {
+    applyPose(rig, jukePose(t));
+    return;
+  }
+  if (kind === 'stumble') {
+    applyPose(rig, stumblePose(t));
+    return;
+  }
+  if (kind === 'tackle') {
+    applyPose(rig, tacklePose(t));
+    return;
+  }
+  if (kind === 'ragdoll') {
+    applyPose(rig, ragdollPose(t));
+    return;
+  }
   applyPose(rig, kindPose(kind, t, speed, rig.pos));
 }
 
 export function applyRun(
   rig: PlayerRig,
   phase: number,
-  stride: number
+  stride: number,
+  lean = 0
 ): void {
-  applyPose(rig, runPose(phase, stride));
+  const pose = runPose(phase, stride);
+  pose.pelvis[2] += lean * 0.45;
+  pose.torso[2] += lean;
+  applyPose(rig, pose);
 }
 
 export function applyHitch(rig: PlayerRig): void {
@@ -276,6 +300,70 @@ function catchPose(): Pose {
   p.torso = [-0.12, 0, 0];
   p.neck = [-0.06, 0, 0];
   p.hop = 0.04;
+  return p;
+}
+
+/** Ball carrier plants outside the frame and cuts across it. */
+function jukePose(t: number): Pose {
+  const p = runPose(t * Math.PI * 2, 0.58);
+  const side = Math.sin(Math.min(1, t) * Math.PI);
+  p.pelvis = [0.18, side * 0.18, side * -0.32];
+  p.torso = [0.24, side * -0.22, side * -0.48];
+  p.lThigh[2] = 0.2;
+  p.rThigh[2] = -0.34;
+  p.rArm = [-0.48, -0.18, 0.38];
+  p.rFore = 1.72;
+  p.neck = [0.08, side * 0.18, side * 0.2];
+  p.hop = 0.02;
+  return p;
+}
+
+/** A beaten defender overstrides before recovering pursuit. */
+function stumblePose(t: number): Pose {
+  const p = runPose(t * Math.PI * 3, 0.42);
+  const fall = Math.sin(Math.min(1, t) * Math.PI);
+  p.pelvis = [0.38 + fall * 0.3, 0, fall * 0.22];
+  p.torso = [0.64 + fall * 0.38, 0, fall * -0.28];
+  p.lArm = [0.54, 0.1, -0.72];
+  p.rArm = [0.46, -0.1, 0.72];
+  p.lFore = 0.28;
+  p.rFore = 0.24;
+  return p;
+}
+
+/** Defender lowers a shoulder and wraps through contact. */
+function tacklePose(t: number): Pose {
+  const p = lineIdle(false);
+  const drive = Math.sin(Math.min(1, t) * Math.PI * 0.5);
+  p.pelvis = [0.36 + drive * 0.26, 0, 0];
+  p.torso = [0.48 + drive * 0.34, 0, 0];
+  p.lArm = [-0.72, 0.14, -0.82];
+  p.rArm = [-0.72, -0.14, 0.82];
+  p.lFore = 0.42;
+  p.rFore = 0.42;
+  p.neck = [0.18, 0, 0];
+  return p;
+}
+
+/**
+ * Loose limbs continue moving after impact while the actor root
+ * tumbles under simple momentum in PlayerActor.
+ */
+function ragdollPose(t: number): Pose {
+  const u = Math.min(1, Math.max(0, t));
+  const loose = Math.sin(u * Math.PI * 2.4);
+  const p = skillIdle();
+  p.pelvis = [0.2 + u * 0.45, loose * 0.12, loose * 0.08];
+  p.torso = [0.18 + u * 0.72, loose * -0.18, loose * 0.14];
+  p.lThigh = [0.3 + u * 0.82, 0, 0.24 + loose * 0.16];
+  p.rThigh = [0.42 - u * 0.34, 0, -0.2 - loose * 0.12];
+  p.lShin = 0.34 + u * 0.92;
+  p.rShin = 0.38 + u * 0.58;
+  p.lArm = [0.1 + loose * 0.8, 0.24, -0.94];
+  p.rArm = [-0.18 - loose * 0.54, -0.18, 0.84];
+  p.lFore = 0.3 + u * 0.72;
+  p.rFore = 0.5 + u * 0.58;
+  p.neck = [0.12 + u * 0.24, loose * -0.12, 0];
   return p;
 }
 

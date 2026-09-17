@@ -8,10 +8,14 @@ import {
   COLORS,
   GOAL_Z,
   HALF_W,
+  JUKE_CHANCE,
+  JUKE_RANGE,
+  JUKE_TIME,
   LOS_Z,
   SACK_RANGE,
   SACK_TIME,
   TACKLE_RANGE,
+  TACKLE_SETTLE_TIME,
   THROW_SPEED,
   YAC_SPEED,
   YAC_TIME
@@ -22,7 +26,8 @@ import {
   COVER3,
   isCoverage,
   nearestEligible,
-  type CoverLook
+  type CoverLook,
+  type PursuitContext
 } from './coverage-play';
 import { closestDefender, gradeReceiver } from './coverage';
 import { Drive } from './drive';
@@ -35,6 +40,16 @@ import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
 import type { CoverGrade, Phase, Vec2 } from './types';
+
+type JukeState =
+  | 'none'
+  | 'approach'
+  | 'cut'
+  | 'escaped'
+  | 'stuffed'
+  | 'down';
+
+type JukeResult = 'won' | 'stuffed' | null;
 
 export interface PlaytestSnap {
   phase: Phase;
@@ -50,7 +65,15 @@ export interface PlaytestSnap {
   aim: Vec2 | null;
   carrier: string | null;
   breaker: string | null;
+  front: string | null;
+  tackler: string | null;
+  jukeState: JukeState;
+  jukeResult: JukeResult;
+  carrierDown: boolean;
   ballInAir: boolean;
+  ballSpeed: number;
+  ballHeight: number;
+  flightPeak: number;
   coverage: { id: string; x: number; z: number }[];
   recs: { id: string; x: number; z: number; cover: CoverGrade }[];
 }
@@ -82,6 +105,16 @@ export class FootballGame {
   private breaker: PlayerActor | null = null;
   private aim: Vec2 | null = null;
   private yacT = 0;
+  private jukeT = 0;
+  private tackleT = 0;
+  private frontMissT = 0;
+  private jukeState: JukeState = 'none';
+  private lastJuke: JukeResult = null;
+  private frontDefender: PlayerActor | null = null;
+  private tackler: PlayerActor | null = null;
+  private jukeTarget: Vec2 | null = null;
+  private requestedJuke = 0;
+  private flightPeak = 0;
   private whistleT = 0;
   private playIdx = 0;
   private look: CoverLook = COVER3;
@@ -178,6 +211,19 @@ export class FootballGame {
     this.stickZ = z;
   }
 
+  /** Let the player call a left or right cut during YAC. */
+  requestJuke(direction: number): void {
+    if (this.phase !== 'yac' || this.jukeState !== 'approach') {
+      return;
+    }
+    this.requestedJuke = direction < 0 ? -1 : 1;
+    const front = this.frontDefender;
+    if (front && this.carrier && this.yacT >= 0.32 &&
+        xzDist(front, this.carrier) < JUKE_RANGE + 1.2) {
+      this.beginJuke(this.carrier);
+    }
+  }
+
   /** Keyboard / list shortcut: throw near that receiver. */
   throwTo(id: string): void {
     if (this.phase !== 'play') {
@@ -190,8 +236,7 @@ export class FootballGame {
     if (!wr?.def.eligible) {
       return;
     }
-    const lead = wr.predict(0.58);
-    this.throwAt(lead);
+    this.throwAt(this.leadReceiver(wr));
   }
 
   /** Click the grass: the QB throws to that spot. */
@@ -228,6 +273,9 @@ export class FootballGame {
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
     this.ball.update(dt);
+    if (this.ball.inAir) {
+      this.flightPeak = Math.max(this.flightPeak, this.ball.pos.y);
+    }
     this.grade();
     if (this.phase === 'play') {
       this.checkSack();
@@ -364,7 +412,15 @@ export class FootballGame {
       aim: this.aim,
       carrier: this.carrier?.def.id ?? null,
       breaker: this.breaker?.def.id ?? null,
+      front: this.frontDefender?.def.id ?? null,
+      tackler: this.tackler?.def.id ?? null,
+      jukeState: this.jukeState,
+      jukeResult: this.lastJuke,
+      carrierDown: this.carrier?.isDown() ?? false,
       ballInAir: this.ball.inAir,
+      ballSpeed: this.ball.vel.length(),
+      ballHeight: this.ball.pos.y,
+      flightPeak: this.flightPeak,
       coverage,
       recs
     };
@@ -394,7 +450,7 @@ export class FootballGame {
       case 'throw':
         return 'Ball in the air. Nearest WR breaks to it.';
       case 'yac':
-        return 'Catch. He is running after the catch.';
+        return this.yacStatus();
       case 'whistle':
         return 'Play is over. Next snap huddles at the new spot.';
       case 'touchdown':
@@ -403,6 +459,23 @@ export class FootballGame {
         return 'Turnover on downs. RESET to start on the 10.';
       default:
         return '';
+    }
+  }
+
+  private yacStatus(): string {
+    switch (this.jukeState) {
+      case 'approach':
+        return 'Defender ahead slows YAC. A/Q or D calls the cut.';
+      case 'cut':
+        return 'Juke in progress — the outcome is not guaranteed.';
+      case 'escaped':
+        return 'Juke won. Trailing pursuit still has closing speed.';
+      case 'stuffed':
+        return 'Juke stuffed. Fight through contact and pursuit.';
+      case 'down':
+        return 'Tackled. The carrier is physically going to ground.';
+      default:
+        return 'Catch. Turn upfield before pursuit closes.';
     }
   }
 
@@ -425,9 +498,20 @@ export class FootballGame {
     this.aimMark.visible = true;
     this.aimMark.position.set(x, 0.06, z);
     this.ball.launch(this.scene, from, vel);
+    this.flightPeak = from.y;
     this.qb().lockAnim('throw', 0.46);
     this.phase = 'throw';
     this.madden.setPhase('throw');
+  }
+
+  private leadReceiver(wr: PlayerActor): Vec2 {
+    const from = handPos(this.qb());
+    let lead = wr.predict(0.68);
+    for (let i = 0; i < 2; i += 1) {
+      const to = new THREE.Vector3(lead.x, 1.68, lead.z);
+      lead = wr.predict(flightTime(from, to) * 0.9);
+    }
+    return lead;
   }
 
   private tickActors(dt: number, live: boolean): void {
@@ -438,7 +522,7 @@ export class FootballGame {
         x: qb.x + this.stickX * 5,
         z: qb.z + this.stickZ * 5
       };
-      qb.chase(to, dt, 7.4);
+      qb.chase(to, dt, 6.35);
       if (qb.z > this.drive.losZ + 1.35) {
         this.startQbRun();
       }
@@ -447,7 +531,11 @@ export class FootballGame {
       const line = p.def.pos === 'OL' || p.def.pos === 'DL';
       const db = isCoverage(p.def.pos);
       if (this.phase === 'yac' && this.carrier === p) {
-        p.advance(dt, YAC_SPEED);
+        this.moveCarrier(p, dt);
+        continue;
+      }
+      if (this.phase === 'yac' && this.tackler === p) {
+        this.poseTackler(p);
         continue;
       }
       if (p === qb && this.phase === 'play' && this.scrambling()) {
@@ -455,7 +543,7 @@ export class FootballGame {
       }
       if (this.phase === 'throw' && p.def.eligible && aim) {
         if (this.shouldBreak(p)) {
-          p.chase(aim, dt, 9.35);
+          p.chase(aim, dt, 7.65);
           continue;
         }
       }
@@ -469,12 +557,139 @@ export class FootballGame {
     } else if (this.phase === 'throw' && this.aim) {
       this.cover.breakOn(dt, this.aim);
     } else if (this.phase === 'yac' && this.carrier) {
-      this.cover.chaseCarrier(dt, this.carrier);
+      this.cover.chaseCarrier(
+        dt,
+        this.carrier,
+        this.pursuitContext()
+      );
     }
   }
 
   private shouldBreak(p: PlayerActor): boolean {
     return this.breaker === p;
+  }
+
+  private moveCarrier(wr: PlayerActor, dt: number): void {
+    if (wr.isDown()) {
+      wr.updateRagdoll(dt);
+      return;
+    }
+    if (this.jukeState === 'cut' && this.jukeTarget) {
+      wr.chase(this.jukeTarget, dt, this.carrierSpeed(wr));
+      return;
+    }
+    wr.advance(dt, this.carrierSpeed(wr));
+  }
+
+  private carrierSpeed(wr: PlayerActor): number {
+    if (this.jukeState === 'cut') {
+      return this.lastJuke === 'won' ? 5.85 : 4.35;
+    }
+    if (this.jukeState === 'stuffed') {
+      return this.jukeT < 0.9 ? 4.65 : 6.35;
+    }
+    if (this.jukeState === 'escaped' && this.jukeT < 0.45) {
+      return 6.25;
+    }
+    const front = this.frontDefender;
+    if (this.jukeState !== 'approach' || !front) {
+      return YAC_SPEED;
+    }
+    const distance = xzDist(wr, front);
+    const factor = clamp(0.62 + distance * 0.065, 0.68, 1);
+    return YAC_SPEED * factor;
+  }
+
+  private poseTackler(tackler: PlayerActor): void {
+    const carrier = this.carrier;
+    if (!carrier) {
+      return;
+    }
+    tackler.facePoint(carrier);
+    const progress = clamp(this.tackleT / 0.62, 0, 1);
+    tackler.setAnim('tackle', progress, 0);
+    tackler.place();
+  }
+
+  private pursuitContext(): PursuitContext {
+    return {
+      frontId: this.frontDefender?.def.id ?? null,
+      frontMissed: this.frontMissT > 0,
+      jukeActive: this.jukeState === 'cut',
+      tackleActive: this.tackler !== null
+    };
+  }
+
+  private updateJuke(wr: PlayerActor): void {
+    const front = this.frontDefender;
+    if (this.jukeState === 'approach' && !front) {
+      this.jukeState = 'none';
+      return;
+    }
+    if (this.jukeState === 'approach' && front &&
+        this.yacT >= 0.38 &&
+        xzDist(wr, front) <= JUKE_RANGE) {
+      this.beginJuke(wr);
+      return;
+    }
+    if (this.jukeState !== 'cut' || this.jukeT < JUKE_TIME) {
+      return;
+    }
+    const won = this.lastJuke === 'won';
+    this.jukeState = won ? 'escaped' : 'stuffed';
+    this.jukeT = 0;
+    this.frontMissT = won ? 1.05 : 0.3;
+    if (won) {
+      front?.lockAnim('stumble', 0.78);
+    }
+    this.toast?.(won ? 'JUKE WON' : 'JUKE STUFFED', !won);
+  }
+
+  private beginJuke(wr: PlayerActor): void {
+    if (this.jukeState !== 'approach') {
+      return;
+    }
+    const direction = this.jukeDirection(wr);
+    const won = Math.random() < JUKE_CHANCE;
+    const width = won ? 2.75 : 1.05;
+    const gain = won ? 2.55 : 1.25;
+    this.lastJuke = won ? 'won' : 'stuffed';
+    this.jukeState = 'cut';
+    this.jukeT = 0;
+    this.jukeTarget = {
+      x: clamp(
+        wr.x + direction * width,
+        -HALF_W + 0.8,
+        HALF_W - 0.8
+      ),
+      z: wr.z + gain
+    };
+    wr.lockAnim('juke', JUKE_TIME);
+  }
+
+  private jukeDirection(wr: PlayerActor): number {
+    if (this.requestedJuke !== 0) {
+      return this.requestedJuke;
+    }
+    const front = this.frontDefender;
+    if (front && Math.abs(front.x - wr.x) > 0.2) {
+      return front.x > wr.x ? -1 : 1;
+    }
+    return wr.x > 0 ? -1 : 1;
+  }
+
+  private startTackle(
+    wr: PlayerActor,
+    tackler: PlayerActor
+  ): void {
+    this.tackler = tackler;
+    this.tackleT = 0;
+    this.jukeState = 'down';
+    this.frontMissT = 0;
+    wr.startRagdoll(tackler);
+    tackler.facePoint(wr);
+    tackler.lockAnim('tackle', 0.72);
+    this.toast?.(`TACKLED · #${tackler.def.number}`, true);
   }
 
   private tickYac(dt: number): void {
@@ -483,6 +698,16 @@ export class FootballGame {
       return;
     }
     this.yacT += dt;
+    this.jukeT += dt;
+    this.frontMissT = Math.max(0, this.frontMissT - dt);
+    if (wr.isDown()) {
+      this.tackleT += dt;
+      if (this.tackleT >= TACKLE_SETTLE_TIME) {
+        this.endYac();
+      }
+      return;
+    }
+    this.updateJuke(wr);
     wr.x = clamp(wr.x, -HALF_W + 0.35, HALF_W - 0.35);
     if (wr.z >= GOAL_Z) {
       this.endYac();
@@ -492,21 +717,37 @@ export class FootballGame {
       this.endYac();
       return;
     }
-    if (this.isTackled(wr) || this.yacT >= YAC_TIME) {
+    const tackler = this.findTackler(wr);
+    if (tackler) {
+      this.startTackle(wr, tackler);
+      return;
+    }
+    if (this.yacT >= YAC_TIME) {
       this.endYac();
     }
   }
 
-  private isTackled(wr: PlayerActor): boolean {
+  private findTackler(wr: PlayerActor): PlayerActor | null {
+    const catchBalance = this.jukeState === 'approach' &&
+      this.yacT < 0.38;
+    if (this.jukeState === 'cut' || catchBalance) {
+      return null;
+    }
+    let tackler: PlayerActor | null = null;
+    let distance = TACKLE_RANGE;
     for (const p of this.players) {
       if (!isCoverage(p.def.pos)) {
         continue;
       }
-      if (xzDist(wr, p) < TACKLE_RANGE) {
-        return true;
+      const frontMiss = p === this.frontDefender &&
+        this.frontMissT > 0;
+      const next = xzDist(wr, p);
+      if (!frontMiss && next < distance) {
+        tackler = p;
+        distance = next;
       }
     }
-    return false;
+    return tackler;
   }
 
   private endYac(): void {
@@ -537,6 +778,16 @@ export class FootballGame {
     this.phase = 'presnap';
     this.clock = 0;
     this.yacT = 0;
+    this.jukeT = 0;
+    this.tackleT = 0;
+    this.frontMissT = 0;
+    this.jukeState = 'none';
+    this.lastJuke = null;
+    this.frontDefender = null;
+    this.tackler = null;
+    this.jukeTarget = null;
+    this.requestedJuke = 0;
+    this.flightPeak = 0;
     this.whistleT = 0;
     this.carrier = null;
     this.breaker = null;
@@ -691,12 +942,11 @@ export class FootballGame {
       this.deadIncomp('BROKEN UP');
       return;
     }
-    this.carrier = wr;
+    this.prepareYac(wr);
     wr.lockAnim('catch', 0.32);
     this.ball.inAir = false;
     this.ball.hold(wr.rig.rightHand);
     this.phase = 'yac';
-    this.yacT = 0;
     this.madden.setPhase('throw');
     this.aimMark.visible = false;
     this.toast?.('COMPLETE', false);
@@ -784,7 +1034,7 @@ export class FootballGame {
     }
     const shift = this.drive.losZ - LOS_Z;
     const to = { x: step.x, z: step.z + shift };
-    wr.chase(to, dt, step.speed ?? 7.2);
+    wr.chase(to, dt, step.speed ?? 6.3);
     if (xzDist(wr, to) < 0.55) {
       this.motionIdx += 1;
     }
@@ -816,12 +1066,47 @@ export class FootballGame {
 
   private startQbRun(): void {
     const qb = this.qb();
-    this.carrier = qb;
+    this.prepareYac(qb);
     this.phase = 'yac';
-    this.yacT = 0;
     this.ball.hold(qb.rig.rightHand);
     this.madden.setPhase('throw');
     this.toast?.('SCRAMBLE', false);
+  }
+
+  private prepareYac(carrier: PlayerActor): void {
+    this.carrier = carrier;
+    this.frontDefender = this.pickFrontDefender(carrier);
+    this.jukeState = this.frontDefender ? 'approach' : 'none';
+    this.lastJuke = null;
+    this.tackler = null;
+    this.jukeTarget = null;
+    this.requestedJuke = 0;
+    this.yacT = 0;
+    this.jukeT = 0;
+    this.tackleT = 0;
+    this.frontMissT = 0;
+  }
+
+  private pickFrontDefender(
+    carrier: PlayerActor
+  ): PlayerActor | null {
+    let best: PlayerActor | null = null;
+    let score = 99;
+    for (const defender of this.players) {
+      if (!isCoverage(defender.def.pos)) {
+        continue;
+      }
+      if (defender.z < carrier.z - 1.2) {
+        continue;
+      }
+      const angleCost = Math.abs(defender.x - carrier.x) * 0.18;
+      const next = xzDist(carrier, defender) + angleCost;
+      if (next < score) {
+        best = defender;
+        score = next;
+      }
+    }
+    return best;
   }
 
   private rebuildGhosts(): void {
@@ -896,7 +1181,7 @@ function flightTime(
   to: THREE.Vector3
 ): number {
   const dist = Math.hypot(to.x - from.x, to.z - from.z);
-  return clamp(dist / THROW_SPEED + 0.02, 0.24, 1.3);
+  return clamp(dist / THROW_SPEED + 0.18, 0.52, 1.72);
 }
 
 function makeAimMark(): THREE.Mesh {
