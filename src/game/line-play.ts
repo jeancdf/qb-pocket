@@ -118,7 +118,7 @@ export class LinePlay {
       this.finishFrame();
       return;
     }
-    this.rushFree(dt, qb);
+    this.rushFree(dt);
     this.tryLock();
     this.drive(dt, qb);
     this.moveCenter(dt);
@@ -270,22 +270,19 @@ export class LinePlay {
     this.helpDl = l >= r ? ldt : rdt;
   }
 
-  private rushFree(dt: number, qb: PlayerActor): void {
+  private rushFree(dt: number): void {
     for (const m of this.matches) {
-      this.rushOne(m, dt, qb);
+      this.rushOne(m, dt);
     }
   }
 
-  private rushOne(m: Match, dt: number, qb: PlayerActor): void {
+  private rushOne(m: Match, dt: number): void {
     if (m.locked || isPassRusher(m.dl.def.id)) {
       return;
     }
-    const spd = m.wide ? 4.25 : 3.15;
-    if (!m.contained) {
-      m.contained = seek(m.dl, m.contain, spd, dt);
-      return;
-    }
-    seek(m.dl, qb, spd, dt);
+    // Unused DE/DT stay on their OT so only 1–2 hunters chase.
+    const to = { x: m.ol.x, z: m.ol.z + 0.72 };
+    seek(m.dl, to, 2.15, dt);
   }
 
   private tryLock(): void {
