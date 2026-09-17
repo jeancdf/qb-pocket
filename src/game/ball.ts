@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import { BALL_DRAG, COLORS, GRAVITY } from './constants';
 
-const PASS_FLIGHT_TIME_SCALE = 1.22;
+const PASS_FLIGHT_TIME_SCALE = 2.1;
+const BALL_VISUAL_SCALE = 1.8;
 const FLIGHT_SIMULATION_STEP = 1 / 120;
 const VELOCITY_CORRECTION_PASSES = 4;
 
@@ -151,5 +152,6 @@ function buildBall(): THREE.Group {
   );
   lace.position.set(0, 0.12, 0);
   g.add(body, stripe, lace);
+  g.scale.setScalar(BALL_VISUAL_SCALE);
   return g;
 }
