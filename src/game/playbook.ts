@@ -38,9 +38,9 @@ export const SMASH: PlayerDef[] = [
     key: '5',
     routeName: 'Flare',
     route: [
-      { x: -4.6, z: L - 6.1, wait: 0.55, speed: 8.4 },
-      { x: -9.5, z: L - 1.4, speed: 8.4 },
-      { x: -15.5, z: L + 1.6, speed: 8.2 }
+      { x: -4.6, z: L - 6.1, wait: 0.55, speed: 5.7 },
+      { x: -9.5, z: L - 1.4, speed: 5.7 },
+      { x: -15.5, z: L + 1.6, speed: 5.6 }
     ]
   },
   {
@@ -55,8 +55,8 @@ export const SMASH: PlayerDef[] = [
     key: '4',
     routeName: 'Flat',
     route: [
-      { x: 10.4, z: L + 1.8, speed: 7.4 },
-      { x: 16.8, z: L + 3.4, speed: 7.6 }
+      { x: 10.4, z: L + 1.8, speed: 5.0 },
+      { x: 16.8, z: L + 3.4, speed: 5.2 }
     ]
   },
   {
@@ -71,8 +71,8 @@ export const SMASH: PlayerDef[] = [
     key: '3',
     routeName: 'Go',
     route: [
-      { x: -18.6, z: L + 12, speed: 9.1 },
-      { x: -19.2, z: L + 38, speed: 9.2 }
+      { x: -18.6, z: L + 12, speed: 6.2 },
+      { x: -19.2, z: L + 38, speed: 6.2 }
     ]
   },
   {
@@ -87,8 +87,8 @@ export const SMASH: PlayerDef[] = [
     key: '2',
     routeName: 'Corner',
     route: [
-      { x: 8.2, z: L + 11.5, speed: 8.8 },
-      { x: 18.4, z: L + 22.5, speed: 8.6 }
+      { x: 8.2, z: L + 11.5, speed: 6.0 },
+      { x: 18.4, z: L + 22.5, speed: 5.8 }
     ]
   },
   {
@@ -103,7 +103,7 @@ export const SMASH: PlayerDef[] = [
     key: '1',
     routeName: 'Hitch',
     route: [
-      { x: 19.2, z: L + 6.1, speed: 8.7 },
+      { x: 19.2, z: L + 6.1, speed: 5.9 },
       { x: 19.2, z: L + 6.1, wait: 8, speed: 0.2 }
     ]
   },
@@ -118,10 +118,10 @@ export const SMASH: PlayerDef[] = [
     start: { x: -5.8, z: L + 0.72 },
     heading: Math.PI,
     route: [
-      { x: -8.6, z: L + 3.2, speed: 4.4 },
-      { x: -9.4, z: L + 0.6, speed: 4.1 },
-      { x: -7.2, z: L - 2.8, speed: 3.8 },
-      { x: -1.8, z: L - 5.0, speed: 3.5 }
+      { x: -8.6, z: L + 3.2, speed: 3.0 },
+      { x: -9.4, z: L + 0.6, speed: 2.8 },
+      { x: -7.2, z: L - 2.8, speed: 2.6 },
+      { x: -1.8, z: L - 5.0, speed: 2.4 }
     ]
   },
   {
@@ -133,8 +133,8 @@ export const SMASH: PlayerDef[] = [
     start: { x: -1.55, z: L + 0.7 },
     heading: Math.PI,
     route: [
-      { x: -1.35, z: L - 0.3, speed: 3.4 },
-      { x: -1.2, z: L - 1.15, speed: 2.8 }
+      { x: -1.35, z: L - 0.3, speed: 2.3 },
+      { x: -1.2, z: L - 1.15, speed: 1.9 }
     ]
   },
   {
@@ -146,8 +146,8 @@ export const SMASH: PlayerDef[] = [
     start: { x: 1.55, z: L + 0.7 },
     heading: Math.PI,
     route: [
-      { x: 1.35, z: L - 0.3, speed: 3.4 },
-      { x: 1.15, z: L - 1.15, speed: 2.8 }
+      { x: 1.35, z: L - 0.3, speed: 2.3 },
+      { x: 1.15, z: L - 1.15, speed: 1.9 }
     ]
   },
   {
@@ -159,10 +159,10 @@ export const SMASH: PlayerDef[] = [
     start: { x: 5.8, z: L + 0.72 },
     heading: Math.PI,
     route: [
-      { x: 8.6, z: L + 3.2, speed: 4.4 },
-      { x: 9.4, z: L + 0.6, speed: 4.1 },
-      { x: 7.2, z: L - 2.8, speed: 3.8 },
-      { x: 1.8, z: L - 5.0, speed: 3.5 }
+      { x: 8.6, z: L + 3.2, speed: 3.0 },
+      { x: 9.4, z: L + 0.6, speed: 2.8 },
+      { x: 7.2, z: L - 2.8, speed: 2.6 },
+      { x: 1.8, z: L - 5.0, speed: 2.4 }
     ]
   },
 
@@ -176,7 +176,7 @@ export const SMASH: PlayerDef[] = [
     start: { x: -5.8, z: L + 4.4 },
     heading: Math.PI,
     route: [
-      { x: -9.2, z: L + 6.6, speed: 7.2 }
+      { x: -9.2, z: L + 6.6, speed: 4.9 }
     ]
   },
   {
@@ -188,7 +188,7 @@ export const SMASH: PlayerDef[] = [
     start: { x: 0.2, z: L + 4.8 },
     heading: Math.PI,
     route: [
-      { x: 0.4, z: L + 9.4, speed: 6.8 }
+      { x: 0.4, z: L + 9.4, speed: 4.6 }
     ]
   },
   {
@@ -200,7 +200,7 @@ export const SMASH: PlayerDef[] = [
     start: { x: 5.6, z: L + 4.4 },
     heading: Math.PI,
     route: [
-      { x: 9.4, z: L + 6.8, speed: 7.3 }
+      { x: 9.4, z: L + 6.8, speed: 5.0 }
     ]
   },
 
@@ -214,7 +214,7 @@ export const SMASH: PlayerDef[] = [
     start: { x: -18.2, z: L + 6.8 },
     heading: Math.PI,
     route: [
-      { x: -16.4, z: L + 20.5, speed: 8.6 }
+      { x: -16.4, z: L + 20.5, speed: 5.8 }
     ]
   },
   {
@@ -226,7 +226,7 @@ export const SMASH: PlayerDef[] = [
     start: { x: 19.0, z: L + 6.6 },
     heading: Math.PI,
     route: [
-      { x: 16.8, z: L + 20.8, speed: 8.7 }
+      { x: 16.8, z: L + 20.8, speed: 5.9 }
     ]
   },
   {
@@ -238,7 +238,7 @@ export const SMASH: PlayerDef[] = [
     start: { x: -2.4, z: L + 13.5 },
     heading: Math.PI,
     route: [
-      { x: -1.0, z: L + 23.5, speed: 8.3 }
+      { x: -1.0, z: L + 23.5, speed: 5.6 }
     ]
   },
   {
@@ -250,8 +250,8 @@ export const SMASH: PlayerDef[] = [
     start: { x: 8.4, z: L + 11.2 },
     heading: Math.PI,
     route: [
-      { x: 9.6, z: L + 12.8, speed: 8.0 },
-      { x: 13.2, z: L + 16.4, speed: 7.8 }
+      { x: 9.6, z: L + 12.8, speed: 5.4 },
+      { x: 13.2, z: L + 16.4, speed: 5.3 }
     ]
   }
 ];
@@ -270,7 +270,7 @@ function ol(
     side: 'offense',
     start: { x, z: L - 0.42 },
     heading: 0,
-    route: [{ x, z: L - 1.35, speed: 2.6 }]
+    route: [{ x, z: L - 1.35, speed: 1.8 }]
   };
 }
 

@@ -24,7 +24,8 @@ export const OPEN_YARDS = 4.4;
 export const WINDOW_YARDS = 2.7;
 export const SACK_TIME = 4.8;
 export const SACK_RANGE = 1.2;
-export const YAC_SPEED = 8.6;
+/** After-catch pace — pads, not an arcade sprint. */
+export const YAC_SPEED = 5.7;
 export const YAC_TIME = 2.85;
 export const TACKLE_RANGE = 1.42;
 export const CATCH_HEIGHT_MIN = 0.45;
