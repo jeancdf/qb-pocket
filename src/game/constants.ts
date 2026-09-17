@@ -28,10 +28,10 @@ export const ROUTE_SPEED_SCALE = 0.84;
 export const YAC_SPEED = 7.05;
 export const YAC_TIME = 5.2;
 export const TACKLE_RANGE = 1.32;
-export const TACKLE_SETTLE_TIME = 1.25;
+export const TACKLE_SETTLE_TIME = 1.65;
 export const JUKE_CHANCE = 0.54;
 export const JUKE_RANGE = 3.15;
-export const JUKE_TIME = 0.62;
+export const JUKE_TIME = 0.82;
 export const CATCH_HEIGHT_MIN = 0.45;
 export const CATCH_HEIGHT_MAX = 2.85;
 

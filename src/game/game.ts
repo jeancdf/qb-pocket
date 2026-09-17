@@ -67,6 +67,7 @@ export interface PlaytestSnap {
   breaker: string | null;
   front: string | null;
   tackler: string | null;
+  lastTackler: string | null;
   jukeState: JukeState;
   jukeResult: JukeResult;
   carrierDown: boolean;
@@ -112,6 +113,7 @@ export class FootballGame {
   private lastJuke: JukeResult = null;
   private frontDefender: PlayerActor | null = null;
   private tackler: PlayerActor | null = null;
+  private lastTacklerId: string | null = null;
   private jukeTarget: Vec2 | null = null;
   private requestedJuke = 0;
   private flightPeak = 0;
@@ -175,6 +177,9 @@ export class FootballGame {
     this.drive.home = 0;
     this.drive.away = 0;
     this.playIdx = 0;
+    this.lastJuke = null;
+    this.lastTacklerId = null;
+    this.flightPeak = 0;
     this.overFn?.(null);
     this.huddle();
   }
@@ -414,6 +419,7 @@ export class FootballGame {
       breaker: this.breaker?.def.id ?? null,
       front: this.frontDefender?.def.id ?? null,
       tackler: this.tackler?.def.id ?? null,
+      lastTackler: this.lastTacklerId,
       jukeState: this.jukeState,
       jukeResult: this.lastJuke,
       carrierDown: this.carrier?.isDown() ?? false,
@@ -665,6 +671,8 @@ export class FootballGame {
       z: wr.z + gain
     };
     wr.lockAnim('juke', JUKE_TIME);
+    const side = direction < 0 ? 'LEFT' : 'RIGHT';
+    this.toast?.(`JUKE ${side}`, false);
   }
 
   private jukeDirection(wr: PlayerActor): number {
@@ -683,6 +691,7 @@ export class FootballGame {
     tackler: PlayerActor
   ): void {
     this.tackler = tackler;
+    this.lastTacklerId = tackler.def.id;
     this.tackleT = 0;
     this.jukeState = 'down';
     this.frontMissT = 0;
@@ -782,12 +791,10 @@ export class FootballGame {
     this.tackleT = 0;
     this.frontMissT = 0;
     this.jukeState = 'none';
-    this.lastJuke = null;
     this.frontDefender = null;
     this.tackler = null;
     this.jukeTarget = null;
     this.requestedJuke = 0;
-    this.flightPeak = 0;
     this.whistleT = 0;
     this.carrier = null;
     this.breaker = null;
@@ -1096,11 +1103,9 @@ export class FootballGame {
       if (!isCoverage(defender.def.pos)) {
         continue;
       }
-      if (defender.z < carrier.z - 1.2) {
-        continue;
-      }
       const angleCost = Math.abs(defender.x - carrier.x) * 0.18;
-      const next = xzDist(carrier, defender) + angleCost;
+      const behind = Math.max(0, carrier.z - defender.z) * 0.45;
+      const next = xzDist(carrier, defender) + angleCost + behind;
       if (next < score) {
         best = defender;
         score = next;
