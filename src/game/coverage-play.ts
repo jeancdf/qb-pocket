@@ -1,16 +1,18 @@
 /**
- * Cover 3 match: DBs and LBs run with assigned threats
- * instead of dying on short playbook landmarks.
+ * Cover 3 / Cover 2 match: DBs and remaining LBs run with
+ * assigned threats. 1–2 DL/LB rushers are owned by LinePlay
+ * so they chase the QB instead of dropping.
  *
  * Smash vs Cover 3:
  * - CBs bail deep thirds (hitch is open underneath).
  * - SS sits the slot to ~12, then passes the corner.
  * - FS takes the deepest middle.
- * - LBs carry TE / RB flats and the hook.
+ * - SAM/WILL carry TE / RB flats. Mike rushes or spies.
  * On the throw they break to the landing spot.
  */
 
 import { LOS_Z } from './constants';
+import { isPassRusher } from './line-play';
 import { clamp, xzDist } from './math';
 import type { PlayerActor } from './players';
 import type { Pos, Vec2 } from './types';
@@ -234,17 +236,6 @@ const C3_JOBS: Job[] = [
     minRel: 2,
     maxRel: 10,
     anticipate: 0.4
-  },
-  {
-    id: 'mlb',
-    match: 'te',
-    zone: 'middleHook',
-    levX: 0,
-    levZ: 1.3,
-    spd: 4.79,
-    minRel: 4,
-    maxRel: 13,
-    anticipate: 0.5
   }
 ];
 
@@ -314,17 +305,6 @@ const C2_JOBS: Job[] = [
     minRel: 3,
     maxRel: 12,
     anticipate: 0.45
-  },
-  {
-    id: 'mlb',
-    match: 'te',
-    zone: 'middleHook',
-    levX: 0,
-    levZ: 1.0,
-    spd: 4.83,
-    minRel: 4,
-    maxRel: 13,
-    anticipate: 0.5
   }
 ];
 
@@ -386,6 +366,9 @@ export class CoverPlay {
   /** Zone-match while the ball is still in the QB's hands. */
   cover(dt: number): void {
     for (const job of this.jobs) {
+      if (isPassRusher(job.id)) {
+        continue;
+      }
       const db = this.byId.get(job.id);
       if (!db) {
         continue;
@@ -400,6 +383,9 @@ export class CoverPlay {
    */
   breakOn(dt: number, spot: Vec2): void {
     for (const job of this.jobs) {
+      if (isPassRusher(job.id)) {
+        continue;
+      }
       const db = this.byId.get(job.id);
       if (!db) {
         continue;
@@ -433,6 +419,9 @@ export class CoverPlay {
   chaseCarrier(dt: number, wr: PlayerActor): void {
     const to = { x: wr.x, z: wr.z };
     for (const job of this.jobs) {
+      if (isPassRusher(job.id)) {
+        continue;
+      }
       const db = this.byId.get(job.id);
       if (!db) {
         continue;

@@ -15,6 +15,9 @@ export function gradeReceiver(
   // Grade the window where the route is heading, not where it was.
   const target = recv.predict(0.38);
   for (const d of defs) {
+    if (!shadesRoute(d, qb)) {
+      continue;
+    }
     const dist = xzDist(recv, d);
     const close = xzDist(target, d);
     nearest = Math.min(nearest, dist);
@@ -48,4 +51,18 @@ export function closestDefender(
     }
   }
   return best;
+}
+
+/**
+ * DL, spies, and QB hunters live in the backfield. They
+ * should not shade downfield receivers as if they dropped.
+ */
+function shadesRoute(
+  d: PlayerActor,
+  qb: PlayerActor
+): boolean {
+  if (d.def.pos === 'DL') {
+    return false;
+  }
+  return d.z >= qb.z + 8;
 }
