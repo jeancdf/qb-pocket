@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createAvatar, type PlayerAvatar } from './avatar';
 import { LOS_Z } from './constants';
 import type { TeamMats } from './materials';
 import { headingLerp, wrapPi, xzDist } from './math';
@@ -56,6 +57,7 @@ export class PlayerActor {
   private holdLeft = 0;
   private holdDur = 0.4;
   private ringMat: THREE.MeshBasicMaterial;
+  private avatar?: PlayerAvatar;
 
   constructor(def: PlayerDef, mats: TeamMats) {
     this.def = def;
@@ -82,6 +84,7 @@ export class PlayerActor {
       this.mesh.add(namePlate(def));
     }
     this.sync();
+    void this.attachAvatar();
   }
 
   reset(): void {
@@ -133,6 +136,7 @@ export class PlayerActor {
   /** Force a pose. Call after update() to override auto locomotion. */
   setAnim(kind: AnimKind, t: number, speed: number): void {
     poseRig(this.rig, kind, t, speed);
+    this.avatar?.setMotion(kind);
   }
 
   /** Hold a throw/catch pose for a beat, then resume. */
@@ -188,6 +192,7 @@ export class PlayerActor {
   }
 
   update(dt: number, live: boolean): void {
+    this.avatar?.update(dt);
     const ox = this.x;
     const oz = this.z;
     const of = this.facing;
@@ -279,12 +284,14 @@ export class PlayerActor {
     const pos = this.def.pos;
     if (this.shouldHitch(live, speed)) {
       applyHitch(this.rig);
+      this.avatar?.setMotion('idle');
       this.lookToQb();
       return;
     }
     if (pos === 'QB' && (!live || speed < 1.5)) {
       this.gait += dt;
       applyScan(this.rig, live ? this.gait : 0);
+      this.avatar?.setMotion('idle');
       return;
     }
     const kind = autoKind(pos, live, speed);
@@ -293,6 +300,7 @@ export class PlayerActor {
       const rate = this.plant > 0 ? 0.45 : 1;
       this.gait += dt * speed * 3.2 * rate;
       applyRun(this.rig, this.gait, stride);
+      this.avatar?.setMotion('run');
       return;
     }
     this.gait += dt * Math.max(speed, 1);
@@ -307,6 +315,7 @@ export class PlayerActor {
     this.holdLeft -= dt;
     const u = 1 - this.holdLeft / Math.max(this.holdDur, 1e-3);
     poseRig(this.rig, this.holdKind, u, 0);
+    this.avatar?.setMotion(this.holdKind);
     if (this.holdLeft <= 0) {
       this.holdKind = null;
     }
@@ -380,6 +389,18 @@ export class PlayerActor {
     const rate = this.plant > 0 ? 0.45 : 1;
     this.gait += dt * Math.max(moved, speed) * 3.2 * rate;
     applyRun(this.rig, this.gait, stride);
+    this.avatar?.setMotion('run');
+  }
+
+  private async attachAvatar(): Promise<void> {
+    try {
+      const avatar = await createAvatar(this.def);
+      this.avatar = avatar;
+      this.rig.pelvis.visible = false;
+      this.mesh.add(avatar.root);
+    } catch (error) {
+      console.error('Unable to load detailed player model.', error);
+    }
   }
 
   /**
