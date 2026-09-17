@@ -94,6 +94,11 @@ window.addEventListener('keydown', (ev) => {
       game.throwTo(row.id);
     }
   }
+  if (game.phase === 'yac' && !game.controlsQbRun() &&
+      ['KeyA', 'KeyQ', 'KeyD'].includes(ev.code)) {
+    game.requestJuke(ev.code === 'KeyD' ? 1 : -1);
+    return;
+  }
   if (ev.key === 'r' || ev.key === 'R') {
     hud.hidePlaybook();
     game.reset();

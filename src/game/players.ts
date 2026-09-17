@@ -20,15 +20,15 @@ const RING_COL: Record<CoverGrade, number> = {
   covered: 0xe35d5d
 };
 
-/** Arcade accel — local so ball-speed can own constants.ts. */
-const ACCEL = 32;
-const BRAKE = 46;
-const TURN = 8;
-const PLANT_ANG = 1.4;
-const PLANT_T = 0.14;
-const PLANT_SPD = 2.4;
-const CUT_MIN = 0.32;
-const ARRIVE_R = 1.25;
+/** Human acceleration and turn rates keep cuts planted and readable. */
+const ACCEL = 15.5;
+const BRAKE = 23;
+const TURN = 5.4;
+const PLANT_ANG = 1.08;
+const PLANT_T = 0.2;
+const PLANT_SPD = 2.1;
+const CUT_MIN = 0.27;
+const ARRIVE_R = 1.6;
 const ARRIVED = 0.26;
 const FLOW_HIT = 0.55;
 const MIN_SPD = 0.4;
@@ -55,6 +55,12 @@ export class PlayerActor {
   private holdKind: AnimKind | null = null;
   private holdLeft = 0;
   private holdDur = 0.4;
+  private bodyLean = 0;
+  private ragdollT = -1;
+  private fallVx = 0;
+  private fallVz = 0;
+  private fallSide = 0;
+  private fallDir = 1;
   private ringMat: THREE.MeshBasicMaterial;
 
   constructor(def: PlayerDef, mats: TeamMats) {
@@ -97,6 +103,10 @@ export class PlayerActor {
     this.chasing = false;
     this.holdKind = null;
     this.holdLeft = 0;
+    this.bodyLean = 0;
+    this.ragdollT = -1;
+    this.fallVx = 0;
+    this.fallVz = 0;
     this.cover = 'idle';
     this.setCover('idle');
     this.setAnim('idle', 0, 0);
@@ -188,6 +198,10 @@ export class PlayerActor {
   }
 
   update(dt: number, live: boolean): void {
+    if (this.ragdollT >= 0) {
+      this.updateRagdoll(dt);
+      return;
+    }
     const ox = this.x;
     const oz = this.z;
     const of = this.facing;
@@ -254,7 +268,9 @@ export class PlayerActor {
     this.chasing = true;
     this.wait = 0;
     this.steer(to, dt, speed, false);
-    this.pumpRun(dt, speed);
+    if (!this.tickHold(dt)) {
+      this.pumpRun(dt, speed);
+    }
     this.sync();
   }
 
@@ -266,6 +282,79 @@ export class PlayerActor {
       this.pumpRun(dt, speed);
     }
     this.sync();
+  }
+
+  /** Bleed momentum when a controlled runner releases the stick. */
+  coast(dt: number): void {
+    this.coastStop(dt);
+    const speed = Math.hypot(this.vx, this.vz);
+    if (!this.tickHold(dt) && speed > MIN_SPD) {
+      this.pumpRun(dt, speed);
+    }
+    this.sync();
+  }
+
+  /**
+   * Transfer running momentum into an articulated fall. The rig
+   * remains live while the root tumbles and slides on the turf.
+   */
+  startRagdoll(from: Vec2): void {
+    const dx = this.x - from.x;
+    const dz = this.z - from.z;
+    const len = Math.max(0.2, Math.hypot(dx, dz));
+    const nx = dx / len;
+    const nz = dz / len;
+    const forwardX = Math.sin(this.facing);
+    const forwardZ = Math.cos(this.facing);
+    const along = nx * forwardX + nz * forwardZ;
+    this.fallDir = along >= -0.2 ? 1 : -1;
+    this.fallSide = clampUnit(nx * forwardZ - nz * forwardX);
+    this.fallVx = this.vx * 0.48 + nx * 1.35;
+    this.fallVz = this.vz * 0.48 + nz * 1.35;
+    this.ragdollT = 0;
+    this.holdKind = null;
+    this.holdLeft = 0;
+  }
+
+  updateRagdoll(dt: number): void {
+    if (this.ragdollT < 0) {
+      return;
+    }
+    this.ragdollT += dt;
+    const drag = Math.exp(-3.2 * dt);
+    this.fallVx *= drag;
+    this.fallVz *= drag;
+    this.x += this.fallVx * dt;
+    this.z += this.fallVz * dt;
+    const u = Math.min(1, this.ragdollT / 0.82);
+    const eased = 1 - Math.pow(1 - u, 3);
+    const angle = eased * (Math.PI / 2 - 0.03);
+    const turfY =
+      0.06 + eased * 0.14 + Math.sin(u * Math.PI) * 0.04;
+    poseRig(this.rig, 'ragdoll', u, 0);
+    this.mesh.position.set(this.x, turfY, this.z);
+    this.mesh.rotation.set(
+      this.fallDir * angle,
+      this.facing,
+      this.fallSide * angle * 0.34,
+      'YXZ'
+    );
+  }
+
+  isDown(): boolean {
+    return this.ragdollT >= 0;
+  }
+
+  velocity(): Vec2 {
+    return { x: this.vx, z: this.vz };
+  }
+
+  /** Keep zone defenders' eyes on the play while they pedal. */
+  facePoint(to: Vec2): void {
+    this.facing = Math.atan2(to.x - this.x, to.z - this.z);
+    if (this.ragdollT < 0) {
+      this.mesh.rotation.set(0, this.facing, 0);
+    }
   }
 
   private driveAnim(
@@ -292,7 +381,7 @@ export class PlayerActor {
       const stride = this.plant > 0 ? 0.4 : 1;
       const rate = this.plant > 0 ? 0.45 : 1;
       this.gait += dt * speed * 3.2 * rate;
-      applyRun(this.rig, this.gait, stride);
+      applyRun(this.rig, this.gait, stride, this.bodyLean);
       return;
     }
     this.gait += dt * Math.max(speed, 1);
@@ -337,7 +426,7 @@ export class PlayerActor {
     this.mesh.position.x = this.x;
     this.mesh.position.z = this.z;
     this.mesh.position.y = 0;
-    this.mesh.rotation.y = this.facing;
+    this.mesh.rotation.set(0, this.facing, 0);
   }
 
   /** Hitch / duplicate waypoint: brake in instead of flowing. */
@@ -360,6 +449,7 @@ export class PlayerActor {
   /** Brake along current velocity; used on hitches. */
   private coastStop(dt: number): void {
     this.plant = Math.max(0, this.plant - dt);
+    this.bodyLean *= Math.max(0, 1 - dt * 7);
     const speed = Math.hypot(this.vx, this.vz);
     if (speed < MIN_SPD) {
       this.vx = 0;
@@ -379,7 +469,7 @@ export class PlayerActor {
     const stride = this.plant > 0 ? 0.4 : 1;
     const rate = this.plant > 0 ? 0.45 : 1;
     this.gait += dt * Math.max(moved, speed) * 3.2 * rate;
-    applyRun(this.rig, this.gait, stride);
+    applyRun(this.rig, this.gait, stride, this.bodyLean);
   }
 
   /**
@@ -398,6 +488,9 @@ export class PlayerActor {
       ? Math.atan2(this.vx, this.vz)
       : desired;
     const err = wrapPi(desired - heading);
+    const leanTarget = clampUnit(err / 1.25) * 0.34;
+    const leanRate = Math.min(1, dt * 7);
+    this.bodyLean += (leanTarget - this.bodyLean) * leanRate;
     const plantCut =
       Math.abs(err) > PLANT_ANG && speed > PLANT_SPD;
     if (plantCut) {
@@ -419,6 +512,10 @@ export class PlayerActor {
       TURN * dt
     );
   }
+}
+
+function clampUnit(value: number): number {
+  return Math.min(1, Math.max(-1, value));
 }
 
 /** Line-play helper: call after PlayerActor.update each frame. */

@@ -32,6 +32,7 @@ export class Hud {
   private homeEl: HTMLElement;
   private awayEl: HTMLElement;
   private bookOpen = false;
+  private toastTimer: number | null = null;
 
   constructor() {
     this.list = el('receiver-list');
@@ -88,12 +89,17 @@ export class Hud {
   }
 
   toast(text: string, bad: boolean): void {
+    if (this.toastTimer !== null) {
+      window.clearTimeout(this.toastTimer);
+    }
     this.toastEl.hidden = false;
     this.toastEl.textContent = text;
     this.toastEl.classList.toggle('is-bad', bad);
-    window.setTimeout(() => {
+    const duration = text.startsWith('TACKLED') ? 2200 : 1600;
+    this.toastTimer = window.setTimeout(() => {
       this.toastEl.hidden = true;
-    }, 1600);
+      this.toastTimer = null;
+    }, duration);
   }
 
   setReceivers(rows: HudRow[]): void {
