@@ -114,13 +114,14 @@ window.addEventListener('keyup', (ev) => {
 });
 
 function syncStick(): void {
-  // AZERTY ZQSD + QWERTY WASD.
+  // AZERTY ZQSD + QWERTY WASD. Camera sits on +x, so world
+  // +x is screen-left: Q/A left, D right.
   const z =
     (held('KeyW') || held('KeyZ') ? 1 : 0) -
     (held('KeyS') ? 1 : 0);
   const x =
-    (held('KeyD') ? 1 : 0) -
-    (held('KeyA') || held('KeyQ') ? 1 : 0);
+    (held('KeyA') || held('KeyQ') ? 1 : 0) -
+    (held('KeyD') ? 1 : 0);
   game.setQbStick(x, z);
 }
 
