@@ -8,17 +8,11 @@ import {
   COLORS,
   GOAL_Z,
   HALF_W,
-  JUKE_CHANCE,
-  JUKE_RANGE,
-  JUKE_TIME,
   LOS_Z,
   SACK_RANGE,
   SACK_TIME,
   TACKLE_RANGE,
-  TACKLE_SETTLE_TIME,
-  THROW_SPEED,
-  YAC_SPEED,
-  YAC_TIME
+  THROW_SPEED
 } from './constants';
 import {
   CoverPlay,
@@ -26,8 +20,7 @@ import {
   COVER3,
   isCoverage,
   nearestEligible,
-  type CoverLook,
-  type PursuitContext
+  type CoverLook
 } from './coverage-play';
 import { closestDefender, gradeReceiver } from './coverage';
 import { Drive } from './drive';
@@ -40,6 +33,14 @@ import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
 import type { CoverGrade, Phase, Vec2 } from './types';
+
+const RECEIVER_YAC_SPEED = 7.05;
+const RECEIVER_YAC_TIME = 5.2;
+const QB_RUN_SPEED = 6.6;
+const TACKLE_SETTLE_TIME = 1.65;
+const JUKE_CHANCE = 0.54;
+const JUKE_RANGE = 3.15;
+const JUKE_TIME = 0.82;
 
 type JukeState =
   | 'none'
@@ -569,12 +570,8 @@ export class FootballGame {
       this.cover.cover(dt);
     } else if (this.phase === 'throw' && this.aim) {
       this.cover.breakOn(dt, this.aim);
-    } else if (this.phase === 'yac' && this.carrier) {
-      this.cover.chaseCarrier(
-        dt,
-        this.carrier,
-        this.pursuitContext()
-      );
+    } else if (this.phase === 'yac' && this.carrier && !this.tackler) {
+      this.cover.chaseCarrier(dt, this.carrier);
     }
   }
 
@@ -610,7 +607,7 @@ export class FootballGame {
       x: qb.x + x * 5,
       z: qb.z + z * 5
     };
-    qb.chase(target, dt, YAC_SPEED * 0.94);
+    qb.chase(target, dt, QB_RUN_SPEED);
   }
 
   private carrierSpeed(wr: PlayerActor): number {
@@ -625,11 +622,11 @@ export class FootballGame {
     }
     const front = this.frontDefender;
     if (this.jukeState !== 'approach' || !front) {
-      return YAC_SPEED;
+      return RECEIVER_YAC_SPEED;
     }
     const distance = xzDist(wr, front);
     const factor = clamp(0.62 + distance * 0.065, 0.68, 1);
-    return YAC_SPEED * factor;
+    return RECEIVER_YAC_SPEED * factor;
   }
 
   private poseTackler(tackler: PlayerActor): void {
@@ -641,15 +638,6 @@ export class FootballGame {
     const progress = clamp(this.tackleT / 0.62, 0, 1);
     tackler.setAnim('tackle', progress, 0);
     tackler.place();
-  }
-
-  private pursuitContext(): PursuitContext {
-    return {
-      frontId: this.frontDefender?.def.id ?? null,
-      frontMissed: this.frontMissT > 0,
-      jukeActive: this.jukeState === 'cut',
-      tackleActive: this.tackler !== null
-    };
   }
 
   private updateJuke(wr: PlayerActor): void {
@@ -757,7 +745,7 @@ export class FootballGame {
       this.startTackle(wr, tackler);
       return;
     }
-    if (wr !== this.qb() && this.yacT >= YAC_TIME) {
+    if (wr !== this.qb() && this.yacT >= RECEIVER_YAC_TIME) {
       this.endYac();
     }
   }

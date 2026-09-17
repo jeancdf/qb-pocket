@@ -17,21 +17,16 @@ export const DRIVE_START_Z = -40;
 export const GRAVITY = 10.73;
 export const BALL_MASS = 0.41;
 export const BALL_DRAG = 0.006;
-/** Slower release speed creates readable flight and a higher arc. */
-export const THROW_SPEED = 30;
+/** ~4.2× a WR at 9 yd/s; camera-feel above NFL 24–30 yd/s. */
+export const THROW_SPEED = 38;
 export const CATCH_RADIUS = 1.85;
 export const OPEN_YARDS = 4.4;
 export const WINDOW_YARDS = 2.7;
 export const SACK_TIME = 4.8;
 export const SACK_RANGE = 1.2;
-export const ROUTE_SPEED_SCALE = 0.84;
-export const YAC_SPEED = 7.05;
-export const YAC_TIME = 5.2;
-export const TACKLE_RANGE = 1.32;
-export const TACKLE_SETTLE_TIME = 1.65;
-export const JUKE_CHANCE = 0.54;
-export const JUKE_RANGE = 3.15;
-export const JUKE_TIME = 0.82;
+export const YAC_SPEED = 8.6;
+export const YAC_TIME = 2.85;
+export const TACKLE_RANGE = 1.42;
 export const CATCH_HEIGHT_MIN = 0.45;
 export const CATCH_HEIGHT_MAX = 2.85;
 

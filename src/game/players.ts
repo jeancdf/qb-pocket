@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { LOS_Z, ROUTE_SPEED_SCALE } from './constants';
+import { LOS_Z } from './constants';
 import type { TeamMats } from './materials';
 import { headingLerp, wrapPi, xzDist } from './math';
 import {
@@ -172,7 +172,7 @@ export class PlayerActor {
       const p = route[i];
       const pz = p.z + this.shiftZ;
       const dist = Math.hypot(p.x - x, pz - z);
-      const spd = (p.speed ?? 8) * ROUTE_SPEED_SCALE * 0.9;
+      const spd = (p.speed ?? 8) * 0.9;
       if (spd < 0.05 || dist < 0.04) {
         x = p.x;
         z = pz;
@@ -230,7 +230,7 @@ export class PlayerActor {
     }
     const p = route[this.idx];
     const target = { x: p.x, z: p.z + this.shiftZ };
-    const spd = (p.speed ?? 8) * ROUTE_SPEED_SCALE;
+    const spd = p.speed ?? 8;
     const stop = this.shouldStopAt(this.idx);
     if (this.steer(target, dt, spd, stop)) {
       this.wait = p.wait ?? 0;

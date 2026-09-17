@@ -25,13 +25,6 @@ interface Job {
   maxRel: number;
 }
 
-export interface PursuitContext {
-  frontId: string | null;
-  frontMissed: boolean;
-  jukeActive: boolean;
-  tackleActive: boolean;
-}
-
 export interface CoverLook {
   id: string;
   name: string;
@@ -47,7 +40,7 @@ const C3_JOBS: Job[] = [
     match: 'wrX',
     levX: 1.2,
     levZ: 2.8,
-    spd: 7.7,
+    spd: 8.95,
     minRel: 7,
     maxRel: 44
   },
@@ -56,7 +49,7 @@ const C3_JOBS: Job[] = [
     match: 'wrZ',
     levX: -1.15,
     levZ: 8.2,
-    spd: 7.65,
+    spd: 8.85,
     minRel: 13,
     maxRel: 44
   },
@@ -65,7 +58,7 @@ const C3_JOBS: Job[] = [
     match: 'wrX',
     levX: 0,
     levZ: 3.6,
-    spd: 7.45,
+    spd: 8.55,
     minRel: 15,
     maxRel: 42
   },
@@ -74,7 +67,7 @@ const C3_JOBS: Job[] = [
     match: 'wrH',
     levX: -0.75,
     levZ: 1.15,
-    spd: 7.25,
+    spd: 8.15,
     minRel: 7,
     maxRel: 16
   },
@@ -83,7 +76,7 @@ const C3_JOBS: Job[] = [
     match: 'te',
     levX: 0.45,
     levZ: 0.85,
-    spd: 6.85,
+    spd: 7.55,
     minRel: 2.5,
     maxRel: 10
   },
@@ -92,7 +85,7 @@ const C3_JOBS: Job[] = [
     match: 'rb',
     levX: -0.55,
     levZ: 0.9,
-    spd: 6.75,
+    spd: 7.45,
     minRel: 2,
     maxRel: 9
   },
@@ -101,7 +94,7 @@ const C3_JOBS: Job[] = [
     match: 'te',
     levX: 0,
     levZ: 1.3,
-    spd: 6.6,
+    spd: 7.05,
     minRel: 5.5,
     maxRel: 12
   }
@@ -113,7 +106,7 @@ const C2_JOBS: Job[] = [
     match: 'wrX',
     levX: 1.4,
     levZ: 0.25,
-    spd: 7.35,
+    spd: 8.2,
     minRel: 4,
     maxRel: 7.5
   },
@@ -122,7 +115,7 @@ const C2_JOBS: Job[] = [
     match: 'wrZ',
     levX: -1.4,
     levZ: 0.25,
-    spd: 7.35,
+    spd: 8.2,
     minRel: 4,
     maxRel: 7.5
   },
@@ -131,7 +124,7 @@ const C2_JOBS: Job[] = [
     match: 'wrX',
     levX: 0,
     levZ: 2.4,
-    spd: 7.55,
+    spd: 8.6,
     minRel: 12,
     maxRel: 28
   },
@@ -140,7 +133,7 @@ const C2_JOBS: Job[] = [
     match: 'wrH',
     levX: 0,
     levZ: 2.2,
-    spd: 7.5,
+    spd: 8.5,
     minRel: 12,
     maxRel: 28
   },
@@ -149,7 +142,7 @@ const C2_JOBS: Job[] = [
     match: 'te',
     levX: 0.4,
     levZ: 0.7,
-    spd: 6.8,
+    spd: 7.5,
     minRel: 2,
     maxRel: 9
   },
@@ -158,7 +151,7 @@ const C2_JOBS: Job[] = [
     match: 'rb',
     levX: -0.4,
     levZ: 0.7,
-    spd: 6.75,
+    spd: 7.4,
     minRel: 2,
     maxRel: 9
   },
@@ -167,7 +160,7 @@ const C2_JOBS: Job[] = [
     match: 'te',
     levX: 0,
     levZ: 1.0,
-    spd: 6.6,
+    spd: 7.1,
     minRel: 4,
     maxRel: 11
   }
@@ -214,7 +207,6 @@ export class CoverPlay {
   private losZ = LOS_Z;
   private jobs: Job[] = COVER3.jobs;
   private lookId = COVER3.id;
-  private reactionT = 0;
 
   constructor(byId: Map<string, PlayerActor>) {
     this.byId = byId;
@@ -222,7 +214,6 @@ export class CoverPlay {
 
   setLos(z: number): void {
     this.losZ = z;
-    this.reactionT = 0;
   }
 
   setLook(look: CoverLook): void {
@@ -232,20 +223,14 @@ export class CoverPlay {
 
   /** Zone-match while the ball is still in the QB's hands. */
   cover(dt: number): void {
-    this.reactionT += dt;
-    const qb = this.byId.get('qb');
     for (const job of this.jobs) {
       const db = this.byId.get(job.id);
       if (!db) {
         continue;
       }
       const wr = this.pickMatch(job);
-      const reading = this.reactionT < reactionDelay(job);
-      const target = reading
-        ? this.readStep(job, db)
-        : this.shade(job, wr);
-      db.chase(target, dt, job.spd * (reading ? 0.72 : 1));
-      db.facePoint(qb ?? wr ?? target);
+      const shade = this.shade(job, wr);
+      db.chase(shade, dt, job.spd);
     }
   }
 
@@ -277,35 +262,19 @@ export class CoverPlay {
     return deep && spot.z < this.losZ + 12;
   }
 
-  /** Pursuit uses leverage and gives trailing defenders closing speed. */
-  chaseCarrier(
-    dt: number,
-    wr: PlayerActor,
-    context: PursuitContext
-  ): void {
-    if (context.tackleActive) {
-      return;
-    }
+  /** After the catch, DBs/LBs run to the ball carrier. */
+  chaseCarrier(dt: number, wr: PlayerActor): void {
+    const to = { x: wr.x, z: wr.z };
     for (const job of this.jobs) {
       const db = this.byId.get(job.id);
       if (!db) {
         continue;
       }
-      const missed = context.frontMissed &&
-        job.id === context.frontId;
-      const trailing = db.z < wr.z - 0.8;
-      const closing = trailing ? 0.92 : 0.28;
-      const jukeBrake = context.jukeActive ? 0.82 : 1;
-      const missBrake = missed ? 0.48 : 1;
-      const speed = (job.spd + closing) * jukeBrake * missBrake;
-      db.chase(pursuitSpot(wr, db), dt, speed);
+      db.chase(to, dt, job.spd + 0.35);
     }
   }
 
   private pickMatch(job: Job): PlayerActor | undefined {
-    if (job.id === 'lcb') {
-      return this.deepLeft();
-    }
     if (job.id === 'rcb') {
       return this.deepRight();
     }
@@ -316,15 +285,6 @@ export class CoverPlay {
       return this.hookThreat();
     }
     return this.byId.get(job.match);
-  }
-
-  private deepLeft(): PlayerActor | undefined {
-    const x = this.byId.get('wrX');
-    const rb = this.byId.get('rb');
-    if (x && rb && rb.z > x.z + 4 && rb.x < -5) {
-      return rb;
-    }
-    return x ?? rb;
   }
 
   /** RCB bails with the deepest threat in the right third. */
@@ -370,9 +330,8 @@ export class CoverPlay {
     if (!wr) {
       return { x: 0, z: minZ };
     }
-    const vel = wr.velocity();
-    let x = wr.x + job.levX + vel.x * 0.12;
-    let z = wr.z + job.levZ + vel.z * 0.16;
+    let x = wr.x + job.levX;
+    let z = wr.z + job.levZ;
     z = clamp(z, minZ, maxZ);
     if (job.id === 'lcb') {
       x = this.lookId === 'c2'
@@ -395,11 +354,6 @@ export class CoverPlay {
     }
     return { x, z };
   }
-
-  private readStep(job: Job, db: PlayerActor): Vec2 {
-    const depth = Math.min(this.losZ + job.minRel, db.z + 2.2);
-    return { x: db.x * 0.98, z: depth };
-  }
 }
 
 const HALF_THIRD = 8.8;
@@ -418,27 +372,4 @@ export function nearestEligible(
     }
   }
   return best;
-}
-
-function reactionDelay(job: Job): number {
-  if (job.id === 'fs' || job.id === 'ss') {
-    return 0.26;
-  }
-  if (job.id === 'lcb' || job.id === 'rcb') {
-    return 0.18;
-  }
-  return 0.14;
-}
-
-function pursuitSpot(
-  carrier: PlayerActor,
-  defender: PlayerActor
-): Vec2 {
-  const velocity = carrier.velocity();
-  const distance = xzDist(carrier, defender);
-  const lead = clamp(distance * 0.07, 0.12, 0.72);
-  return {
-    x: carrier.x + velocity.x * lead,
-    z: carrier.z + velocity.z * lead
-  };
 }
