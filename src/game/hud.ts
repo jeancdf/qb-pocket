@@ -95,10 +95,11 @@ export class Hud {
     this.toastEl.hidden = false;
     this.toastEl.textContent = text;
     this.toastEl.classList.toggle('is-bad', bad);
+    const duration = text.startsWith('TACKLED') ? 2200 : 1600;
     this.toastTimer = window.setTimeout(() => {
       this.toastEl.hidden = true;
       this.toastTimer = null;
-    }, 1600);
+    }, duration);
   }
 
   setReceivers(rows: HudRow[]): void {

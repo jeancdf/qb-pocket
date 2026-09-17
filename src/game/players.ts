@@ -328,10 +328,11 @@ export class PlayerActor {
     this.z += this.fallVz * dt;
     const u = Math.min(1, this.ragdollT / 0.82);
     const eased = 1 - Math.pow(1 - u, 3);
-    const angle = eased * 1.42;
-    const hop = Math.sin(u * Math.PI) * 0.11;
+    const angle = eased * (Math.PI / 2 - 0.03);
+    const turfY =
+      0.06 + eased * 0.14 + Math.sin(u * Math.PI) * 0.04;
     poseRig(this.rig, 'ragdoll', u, 0);
-    this.mesh.position.set(this.x, hop, this.z);
+    this.mesh.position.set(this.x, turfY, this.z);
     this.mesh.rotation.set(
       this.fallDir * angle,
       this.facing,

@@ -353,17 +353,17 @@ function ragdollPose(t: number): Pose {
   const u = Math.min(1, Math.max(0, t));
   const loose = Math.sin(u * Math.PI * 2.4);
   const p = skillIdle();
-  p.pelvis = [0.2 + u * 0.45, loose * 0.12, loose * 0.08];
-  p.torso = [0.18 + u * 0.72, loose * -0.18, loose * 0.14];
-  p.lThigh = [0.3 + u * 0.82, 0, 0.24 + loose * 0.16];
-  p.rThigh = [0.42 - u * 0.34, 0, -0.2 - loose * 0.12];
-  p.lShin = 0.34 + u * 0.92;
-  p.rShin = 0.38 + u * 0.58;
-  p.lArm = [0.1 + loose * 0.8, 0.24, -0.94];
-  p.rArm = [-0.18 - loose * 0.54, -0.18, 0.84];
-  p.lFore = 0.3 + u * 0.72;
-  p.rFore = 0.5 + u * 0.58;
-  p.neck = [0.12 + u * 0.24, loose * -0.12, 0];
+  p.pelvis = [0.25 + u * 0.5, loose * 0.16, loose * 0.2];
+  p.torso = [0.22 + u * 0.82, loose * -0.24, loose * 0.34];
+  p.lThigh = [0.28 + u * 0.95, 0, 0.52 + loose * 0.2];
+  p.rThigh = [0.46 - u * 0.42, 0, -0.48 - loose * 0.18];
+  p.lShin = 0.38 + u * 1.05;
+  p.rShin = 0.42 + u * 0.72;
+  p.lArm = [0.18 + loose * 0.72, 0.3, -1.48];
+  p.rArm = [-0.22 - loose * 0.62, -0.26, 1.42];
+  p.lFore = 0.22 + u * 0.92;
+  p.rFore = 0.32 + u * 0.88;
+  p.neck = [0.16 + u * 0.3, loose * -0.16, loose * 0.1];
   return p;
 }
 

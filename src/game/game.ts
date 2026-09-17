@@ -27,7 +27,7 @@ import { Drive } from './drive';
 import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
 import { makeTeamMats } from './materials';
-import { clamp, xzDist } from './math';
+import { clamp, lerp, xzDist } from './math';
 import { LinePlay } from './line-play';
 import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS, type OffPlay } from './plays';
@@ -1017,6 +1017,7 @@ export class FootballGame {
   }
 
   private followCam(dt: number, live: boolean): void {
+    this.updateTackleZoom(dt);
     if (this.phase === 'yac' && this.carrier) {
       this.madden.follow(this.carrier.x, this.carrier.z, dt);
       return;
@@ -1025,6 +1026,15 @@ export class FootballGame {
       const qb = this.qb();
       this.madden.follow(qb.x, qb.z, dt);
     }
+  }
+
+  private updateTackleZoom(dt: number): void {
+    const down = this.phase === 'yac' &&
+      Boolean(this.carrier?.isDown());
+    const target = down ? 1.32 : 1;
+    const amount = 1 - Math.exp(-dt * 5.5);
+    this.camera.zoom = lerp(this.camera.zoom, target, amount);
+    this.camera.updateProjectionMatrix();
   }
 
   private applyOffense(): void {
