@@ -12,7 +12,8 @@ import {
   SACK_RANGE,
   SACK_TIME,
   TACKLE_RANGE,
-  THROW_SPEED
+  THROW_SPEED,
+  YAC_SPEED
 } from './constants';
 import {
   CoverPlay,
@@ -34,7 +35,6 @@ import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
 import type { CoverGrade, Phase, Vec2 } from './types';
 
-const RECEIVER_YAC_SPEED = 7.05;
 const RECEIVER_YAC_TIME = 5.2;
 const QB_RUN_SPEED = 6.6;
 const TACKLE_SETTLE_TIME = 1.65;
@@ -622,11 +622,11 @@ export class FootballGame {
     }
     const front = this.frontDefender;
     if (this.jukeState !== 'approach' || !front) {
-      return RECEIVER_YAC_SPEED;
+      return YAC_SPEED;
     }
     const distance = xzDist(wr, front);
     const factor = clamp(0.62 + distance * 0.065, 0.68, 1);
-    return RECEIVER_YAC_SPEED * factor;
+    return YAC_SPEED * factor;
   }
 
   private poseTackler(tackler: PlayerActor): void {

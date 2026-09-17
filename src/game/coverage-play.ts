@@ -175,7 +175,7 @@ const C3_JOBS: Job[] = [
     zone: 'deepLeft',
     levX: 1.2,
     levZ: 3.2,
-    spd: 8.95,
+    spd: 6.09,
     minRel: 7,
     maxRel: 44,
     anticipate: 0.65
@@ -186,7 +186,7 @@ const C3_JOBS: Job[] = [
     zone: 'deepRight',
     levX: -1.15,
     levZ: 3.2,
-    spd: 8.85,
+    spd: 6.02,
     minRel: 7,
     maxRel: 44,
     anticipate: 0.65
@@ -197,7 +197,7 @@ const C3_JOBS: Job[] = [
     zone: 'deepMiddle',
     levX: 0,
     levZ: 4.0,
-    spd: 8.55,
+    spd: 5.81,
     minRel: 12,
     maxRel: 42,
     anticipate: 0.75
@@ -208,7 +208,7 @@ const C3_JOBS: Job[] = [
     zone: 'rightHook',
     levX: -0.75,
     levZ: 1.15,
-    spd: 8.15,
+    spd: 5.54,
     minRel: 5,
     maxRel: 16,
     anticipate: 0.45
@@ -219,7 +219,7 @@ const C3_JOBS: Job[] = [
     zone: 'rightFlat',
     levX: 0.45,
     levZ: 0.85,
-    spd: 7.55,
+    spd: 5.13,
     minRel: 2.5,
     maxRel: 10,
     anticipate: 0.4
@@ -230,7 +230,7 @@ const C3_JOBS: Job[] = [
     zone: 'leftFlat',
     levX: -0.55,
     levZ: 0.9,
-    spd: 7.45,
+    spd: 5.07,
     minRel: 2,
     maxRel: 10,
     anticipate: 0.4
@@ -241,7 +241,7 @@ const C3_JOBS: Job[] = [
     zone: 'middleHook',
     levX: 0,
     levZ: 1.3,
-    spd: 7.05,
+    spd: 4.79,
     minRel: 4,
     maxRel: 13,
     anticipate: 0.5
@@ -255,7 +255,7 @@ const C2_JOBS: Job[] = [
     zone: 'leftFlat',
     levX: 1.4,
     levZ: 0.25,
-    spd: 8.2,
+    spd: 5.58,
     minRel: 3,
     maxRel: 10,
     anticipate: 0.35
@@ -266,7 +266,7 @@ const C2_JOBS: Job[] = [
     zone: 'rightFlat',
     levX: -1.4,
     levZ: 0.25,
-    spd: 8.2,
+    spd: 5.58,
     minRel: 3,
     maxRel: 10,
     anticipate: 0.35
@@ -277,7 +277,7 @@ const C2_JOBS: Job[] = [
     zone: 'leftHalf',
     levX: 0,
     levZ: 3.4,
-    spd: 8.6,
+    spd: 5.85,
     minRel: 11,
     maxRel: 40,
     anticipate: 0.7
@@ -288,7 +288,7 @@ const C2_JOBS: Job[] = [
     zone: 'rightHalf',
     levX: 0,
     levZ: 3.4,
-    spd: 8.5,
+    spd: 5.78,
     minRel: 11,
     maxRel: 40,
     anticipate: 0.7
@@ -299,7 +299,7 @@ const C2_JOBS: Job[] = [
     zone: 'rightHook',
     levX: 0.4,
     levZ: 0.7,
-    spd: 7.5,
+    spd: 5.10,
     minRel: 3,
     maxRel: 12,
     anticipate: 0.45
@@ -310,7 +310,7 @@ const C2_JOBS: Job[] = [
     zone: 'leftHook',
     levX: -0.4,
     levZ: 0.7,
-    spd: 7.4,
+    spd: 5.03,
     minRel: 3,
     maxRel: 12,
     anticipate: 0.45
@@ -321,7 +321,7 @@ const C2_JOBS: Job[] = [
     zone: 'middleHook',
     levX: 0,
     levZ: 1.0,
-    spd: 7.1,
+    spd: 4.83,
     minRel: 4,
     maxRel: 13,
     anticipate: 0.5
@@ -413,12 +413,20 @@ export class CoverPlay {
         this.matchRoute(db, job, dt, 1);
         continue;
       }
-      db.chase(spot, dt, job.spd + 0.35);
+      db.chase(spot, dt, this.pursuitSpeed(job));
     }
   }
 
   private stayHigh(job: Job, spot: Vec2): boolean {
     return ZONES[job.zone].deep && spot.z < this.losZ + 11.5;
+  }
+
+  /**
+   * After-catch close vs YAC 5.7. First man stays under ~6.9 so a
+   * juke can still win; floor 6.55 so a trailer can still finish.
+   */
+  private pursuitSpeed(job: Job): number {
+    return clamp(job.spd + 0.85, 6.55, 6.9);
   }
 
   /** After the catch, DBs/LBs run to the ball carrier. */
@@ -429,7 +437,7 @@ export class CoverPlay {
       if (!db) {
         continue;
       }
-      db.chase(to, dt, job.spd + 0.35);
+      db.chase(to, dt, this.pursuitSpeed(job));
     }
   }
 
