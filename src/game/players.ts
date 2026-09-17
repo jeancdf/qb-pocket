@@ -136,7 +136,7 @@ export class PlayerActor {
   /** Force a pose. Call after update() to override auto locomotion. */
   setAnim(kind: AnimKind, t: number, speed: number): void {
     poseRig(this.rig, kind, t, speed);
-    this.avatar?.setMotion(kind);
+    this.avatar?.setMotion(kind, t);
   }
 
   /** Hold a throw/catch pose for a beat, then resume. */
@@ -315,7 +315,7 @@ export class PlayerActor {
     this.holdLeft -= dt;
     const u = 1 - this.holdLeft / Math.max(this.holdDur, 1e-3);
     poseRig(this.rig, this.holdKind, u, 0);
-    this.avatar?.setMotion(this.holdKind);
+    this.avatar?.setMotion(this.holdKind, u);
     if (this.holdLeft <= 0) {
       this.holdKind = null;
     }
