@@ -294,6 +294,20 @@ export class PlayerActor {
     return dist < hit;
   }
 
+  /**
+   * Shift out of another body and drop the part of the velocity
+   * that drives into it (`towardX/Z` points at the other player).
+   */
+  bump(dx: number, dz: number, towardX: number, towardZ: number): void {
+    this.x += dx;
+    this.z += dz;
+    const into = this.vx * towardX + this.vz * towardZ;
+    if (into > 0) {
+      this.vx -= towardX * into;
+      this.vz -= towardZ * into;
+    }
+  }
+
   /** Stop following the playbook; update() then coasts to a stop. */
   leaveRoute(): void {
     this.offRoute = true;

@@ -48,6 +48,7 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | `receiver-grade.ts` | Open / window / covered grade for the HUD rings. |
 | `playbook.ts` | Roster and base formation. |
 | `plays.ts` | Offensive plays (routes, motion). `play-hints.ts` has the pre-snap tips. |
-| `players.ts`, `rig.ts`, `pose-blend.ts` | Player actor, body model and animation poses. |
+| `players.ts`, `rig.ts`, `pose-blend.ts` | Player actor (locomotion, inertia), body model and animation poses. |
+| `collisions.ts` | Keeps players from running through each other. |
 | `field.ts`, `materials.ts`, `scene-kit.ts` | Field, team kits, renderer, lights, aim ring, route lines. |
 | `drive.ts`, `hud.ts`, `throw-meter.ts` | Downs and score, HUD, throw power meter. |

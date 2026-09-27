@@ -15,6 +15,7 @@ import {
   type CoverLook
 } from './coverage-looks';
 import { CoverPlay, isCoverage, nearestEligible } from './coverage-play';
+import { separatePlayers } from './collisions';
 import { Drive } from './drive';
 import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
@@ -341,6 +342,9 @@ export class FootballGame {
     this.tickCharge(dt);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
+    if (live || this.phase === 'yac') {
+      separatePlayers(this.players, (a, b) => this.tackling(a, b));
+    }
     if (this.phase === 'play') {
       this.tickEyes(dt);
     }
@@ -968,6 +972,13 @@ export class FootballGame {
     const rest = pack?.route ?? wr.def.route ?? [];
     wr.setSkill(local, [local, ...rest], pack?.routeName ?? 'Motion');
     this.rebuildGhosts();
+  }
+
+  /** Carrier and tackler are meant to collide; let the tackle play. */
+  private tackling(a: PlayerActor, b: PlayerActor): boolean {
+    const t = this.yac.tackler;
+    const c = this.yac.carrier;
+    return !!t && !!c && ((a === t && b === c) || (a === c && b === t));
   }
 
   private scrambling(): boolean {
