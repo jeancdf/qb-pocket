@@ -6,7 +6,7 @@
  * only turns situations into numbers and outcomes.
  */
 
-import { CATCH_RADIUS } from './constants';
+import { CATCH_RADIUS, THROW_SPEED } from './constants';
 import { clamp, lerp, xzDist } from './math';
 import type { Vec2 } from './types';
 
@@ -180,4 +180,10 @@ export function contest(
 function gauss(rng: () => number): number {
   // Sum of three uniforms: cheap, bounded bell curve (~σ 1).
   return (rng() + rng() + rng() - 1.5) * 2;
+}
+
+/** Seconds a pass takes from `from` to `to`, before scaling. */
+export function flightTime(from: Vec2, to: Vec2): number {
+  const dist = Math.hypot(to.x - from.x, to.z - from.z);
+  return clamp(dist / THROW_SPEED + 0.18, 0.52, 1.72);
 }

@@ -1,5 +1,8 @@
 /**
- * Extra defensive calls on top of Cover 3 / Cover 2:
+ * Every defensive call and the data it is made of (jobs, zones,
+ * alignments). CoverPlay in coverage-play.ts runs them.
+ * - COVER 3      : three deep, CBs bail, SS sits the slot.
+ * - COVER 2      : two deep halves, CBs squat the flats.
  * - COVER 1      : man under, FS deep middle, Mike robber.
  * - COVER 1 BLITZ: same shell, Mike blitzes.
  * - COVER 0      : all-out man, Mike + Will blitz, nobody deep.
@@ -11,16 +14,227 @@
  */
 
 import { LOS_Z } from './constants';
-import {
-  COVER2,
-  COVER3,
-  type CoverLook,
-  type Job
-} from './coverage-play';
 import type { OffPlay } from './plays';
 import type { Vec2 } from './types';
 
 const L = LOS_Z;
+
+export type ZoneId =
+  | 'deepLeft'
+  | 'deepMiddle'
+  | 'deepRight'
+  | 'leftHalf'
+  | 'rightHalf'
+  | 'leftFlat'
+  | 'leftHook'
+  | 'middleHook'
+  | 'rightHook'
+  | 'rightFlat'
+  | 'quarterLeft'
+  | 'quarterMidLeft'
+  | 'quarterMidRight'
+  | 'quarterRight';
+
+export interface Job {
+  id: string;
+  match: string;
+  zone: ZoneId;
+  levX: number;
+  levZ: number;
+  spd: number;
+  minRel: number;
+  maxRel: number;
+  anticipate: number;
+  /**
+   * 'man' trails `match` wherever he goes (levX = inside
+   * leverage, levZ = cushion). Zone is the default.
+   */
+  kind?: 'zone' | 'man';
+  /** 0–1: how hard this zone player jumps the QB's eyes. */
+  reads?: number;
+  /** Man alignment depth off the ball (yards). */
+  press?: number;
+}
+
+export interface CoverLook {
+  id: string;
+  name: string;
+  jobs: Job[];
+  starts: Record<string, Vec2>;
+  /** Extra blitzers on top of the edge rusher (LB / S ids). */
+  rush?: string[];
+  /** Mike spies the QB when he has no job (default true). */
+  spy?: boolean;
+}
+
+const C3_JOBS: Job[] = [
+  {
+    id: 'lcb',
+    match: 'wrX',
+    zone: 'deepLeft',
+    levX: 1.2,
+    levZ: 3.2,
+    spd: 6.09,
+    minRel: 7,
+    maxRel: 44,
+    anticipate: 0.65
+  },
+  {
+    id: 'rcb',
+    match: 'wrZ',
+    zone: 'deepRight',
+    levX: -1.15,
+    levZ: 3.2,
+    spd: 6.02,
+    minRel: 7,
+    maxRel: 44,
+    anticipate: 0.65
+  },
+  {
+    id: 'fs',
+    match: 'wrH',
+    zone: 'deepMiddle',
+    levX: 0,
+    levZ: 4.0,
+    spd: 5.81,
+    minRel: 12,
+    maxRel: 42,
+    anticipate: 0.75,
+    reads: 0.9
+  },
+  {
+    id: 'ss',
+    match: 'wrH',
+    zone: 'rightHook',
+    levX: -0.75,
+    levZ: 1.15,
+    spd: 5.54,
+    minRel: 5,
+    maxRel: 16,
+    anticipate: 0.45
+  },
+  {
+    id: 'slb',
+    match: 'te',
+    zone: 'rightFlat',
+    levX: 0.45,
+    levZ: 0.85,
+    spd: 5.13,
+    minRel: 2.5,
+    maxRel: 10,
+    anticipate: 0.4
+  },
+  {
+    id: 'wlb',
+    match: 'rb',
+    zone: 'leftFlat',
+    levX: -0.55,
+    levZ: 0.9,
+    spd: 5.07,
+    minRel: 2,
+    maxRel: 10,
+    anticipate: 0.4
+  }
+];
+
+const C2_JOBS: Job[] = [
+  {
+    id: 'lcb',
+    match: 'wrX',
+    zone: 'leftFlat',
+    levX: 1.4,
+    levZ: 0.25,
+    spd: 5.58,
+    minRel: 3,
+    maxRel: 10,
+    anticipate: 0.35
+  },
+  {
+    id: 'rcb',
+    match: 'wrZ',
+    zone: 'rightFlat',
+    levX: -1.4,
+    levZ: 0.25,
+    spd: 5.58,
+    minRel: 3,
+    maxRel: 10,
+    anticipate: 0.35
+  },
+  {
+    id: 'fs',
+    match: 'wrX',
+    zone: 'leftHalf',
+    levX: 0,
+    levZ: 3.4,
+    spd: 5.85,
+    minRel: 11,
+    maxRel: 40,
+    anticipate: 0.7
+  },
+  {
+    id: 'ss',
+    match: 'wrZ',
+    zone: 'rightHalf',
+    levX: 0,
+    levZ: 3.4,
+    spd: 5.78,
+    minRel: 11,
+    maxRel: 40,
+    anticipate: 0.7
+  },
+  {
+    id: 'slb',
+    match: 'te',
+    zone: 'rightHook',
+    levX: 0.4,
+    levZ: 0.7,
+    spd: 5.10,
+    minRel: 3,
+    maxRel: 12,
+    anticipate: 0.45
+  },
+  {
+    id: 'wlb',
+    match: 'rb',
+    zone: 'leftHook',
+    levX: -0.4,
+    levZ: 0.7,
+    spd: 5.03,
+    minRel: 3,
+    maxRel: 12,
+    anticipate: 0.45
+  }
+];
+
+export const COVER3: CoverLook = {
+  id: 'c3',
+  name: 'COVER 3',
+  jobs: C3_JOBS,
+  starts: {
+    lcb: { x: -18.2, z: L + 6.8 },
+    rcb: { x: 19.0, z: L + 6.6 },
+    fs: { x: -2.4, z: L + 13.5 },
+    ss: { x: 8.4, z: L + 11.2 },
+    wlb: { x: -5.8, z: L + 4.4 },
+    mlb: { x: 0.2, z: L + 4.8 },
+    slb: { x: 5.6, z: L + 4.4 }
+  }
+};
+
+export const COVER2: CoverLook = {
+  id: 'c2',
+  name: 'COVER 2',
+  jobs: C2_JOBS,
+  starts: {
+    lcb: { x: -18.2, z: L + 5.1 },
+    rcb: { x: 19.0, z: L + 5.0 },
+    fs: { x: -7.2, z: L + 13.8 },
+    ss: { x: 7.4, z: L + 13.6 },
+    wlb: { x: -4.6, z: L + 4.2 },
+    mlb: { x: 0.2, z: L + 4.3 },
+    slb: { x: 4.8, z: L + 4.2 }
+  }
+};
 
 function man(
   id: string,

@@ -2,71 +2,53 @@ import * as THREE from 'three';
 import { ballisticVel, Football, PASS_FLIGHT_TIME_SCALE } from './ball';
 import { MaddenCamera } from './camera';
 import {
-  CATCH_HEIGHT_MAX,
-  CATCH_HEIGHT_MIN,
-  CATCH_RADIUS,
   COLORS,
   GOAL_Z,
   HALF_W,
   LOS_Z,
   SACK_RANGE,
-  SACK_TIME,
-  TACKLE_RANGE,
-  THROW_SPEED,
-  YAC_SPEED
+  SACK_TIME
 } from './constants';
 import {
-  CoverPlay,
   COVER3,
-  isCoverage,
-  nearestEligible,
+  lookStarts,
+  pickLook,
   type CoverLook
-} from './coverage-play';
-import { closestDefender, gradeReceiver } from './coverage';
-import { lookStarts, pickLook } from './coverage-looks';
+} from './coverage-looks';
+import { CoverPlay, isCoverage, nearestEligible } from './coverage-play';
 import { Drive } from './drive';
 import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
+import { isPassRusher, LinePlay, passRushers } from './line-play';
 import { makeTeamMats } from './materials';
 import { clamp, xzDist } from './math';
-import { isPassRusher, LinePlay, passRushers } from './line-play';
+import { PassFlight } from './pass-flight';
+import { beatId, readHint } from './play-hints';
 import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
+import { advancePoseClock } from './pose-blend';
 import { QbEyes } from './qb-eyes';
+import { gradeReceiver } from './receiver-grade';
 import {
-  BALL_READ_DELAY,
+  addLights,
+  AimMark,
+  makeRenderer,
+  RouteGhosts
+} from './scene-kit';
+import {
   chargePower,
-  contest,
+  flightTime,
   makeShot,
   overHold,
   pressureFrom,
   spreadFor,
   TAP_POWER,
-  TIP_COOLDOWN,
-  type ThrowShot,
   type ThrowSituation,
   type ThrowTarget
 } from './throwing';
-import { advancePoseClock } from './pose-blend';
 import type { CoverGrade, Phase, Vec2 } from './types';
-
-const RECEIVER_YAC_TIME = 5.2;
-const QB_RUN_SPEED = 6.6;
-const TACKLE_SETTLE_TIME = 1.65;
-const JUKE_CHANCE = 0.54;
-const JUKE_RANGE = 3.15;
-const JUKE_TIME = 0.82;
-
-type JukeState =
-  | 'none'
-  | 'approach'
-  | 'cut'
-  | 'escaped'
-  | 'stuffed'
-  | 'down';
-
-type JukeResult = 'won' | 'stuffed' | null;
+import { YacRun, type JukeResult, type JukeState } from './yac';
 
 export interface PlaytestSnap {
   phase: Phase;
@@ -117,22 +99,10 @@ export class FootballGame {
     0
   );
   private readonly hit = new THREE.Vector3();
-  private readonly aimMark: THREE.Mesh;
-  private readonly routeLines: THREE.Line[] = [];
-  private carrier: PlayerActor | null = null;
-  private breaker: PlayerActor | null = null;
-  private aim: Vec2 | null = null;
-  private yacT = 0;
-  private jukeT = 0;
-  private tackleT = 0;
-  private frontMissT = 0;
-  private jukeState: JukeState = 'none';
-  private lastJuke: JukeResult = null;
-  private frontDefender: PlayerActor | null = null;
-  private tackler: PlayerActor | null = null;
-  private lastTacklerId: string | null = null;
-  private jukeTarget: Vec2 | null = null;
-  private requestedJuke = 0;
+  private readonly aimMark: AimMark;
+  private readonly ghosts: RouteGhosts;
+  private readonly yac: YacRun;
+  private readonly flight = new PassFlight();
   private flightPeak = 0;
   private whistleT = 0;
   private playIdx = 0;
@@ -142,16 +112,7 @@ export class FootballGame {
   private motionIdx = 0;
   private stickX = 0;
   private stickZ = 0;
-  private readonly ghosts = new Map<string, THREE.Line>();
   private charge: { target: ThrowTarget; t: number } | null = null;
-  private shot: ThrowShot | null = null;
-  private releaseSpot: Vec2 | null = null;
-  private throwT = 0;
-  private tipT = 0;
-  private tipped = false;
-  private closest: number | null = null;
-  private wrHandsOff = false;
-  private incompMsg = 'INCOMPLETE';
   private turnoverText = '';
   private toast?: (msg: string, bad: boolean) => void;
   private overFn?: (over: 'win' | 'loss' | null) => void;
@@ -165,9 +126,10 @@ export class FootballGame {
     this.scene.fog = new THREE.Fog(COLORS.fog, 70, 210);
     addLights(this.scene);
     this.sticks = buildWorld(this.scene);
-    this.aimMark = makeAimMark();
-    this.scene.add(this.aimMark);
+    this.aimMark = new AimMark(this.scene);
+    this.ghosts = new RouteGhosts(this.scene);
     this.spawn();
+    this.yac = new YacRun(this.players, (m, b) => this.toast?.(m, b));
     this.line = new LinePlay(this.byId);
     this.cover = new CoverPlay(this.byId, this.eyes);
     this.huddle();
@@ -207,8 +169,7 @@ export class FootballGame {
     this.drive.home = 0;
     this.drive.away = 0;
     this.playIdx = 0;
-    this.lastJuke = null;
-    this.lastTacklerId = null;
+    this.yac.forget();
     this.flightPeak = 0;
     this.turnoverText = '';
     this.overFn?.(null);
@@ -252,19 +213,13 @@ export class FootballGame {
 
   /** Let the player call a left or right cut during YAC. */
   requestJuke(direction: number): void {
-    if (this.phase !== 'yac' || this.jukeState !== 'approach') {
-      return;
-    }
-    this.requestedJuke = direction < 0 ? -1 : 1;
-    const front = this.frontDefender;
-    if (front && this.carrier && this.yacT >= 0.32 &&
-        xzDist(front, this.carrier) < JUKE_RANGE + 1.2) {
-      this.beginJuke(this.carrier);
+    if (this.phase === 'yac') {
+      this.yac.requestJuke(direction);
     }
   }
 
   controlsQbRun(): boolean {
-    return this.phase === 'yac' && this.carrier === this.qb();
+    return this.phase === 'yac' && this.yac.carrier === this.qb();
   }
 
   /** HUD row click: instant touch pass to that receiver. */
@@ -375,8 +330,7 @@ export class FootballGame {
       this.charge.target.spot = spot;
     }
     this.eyes.look(spot);
-    this.aimMark.visible = true;
-    this.aimMark.position.set(spot.x, 0.06, spot.z);
+    this.aimMark.place(spot);
   }
 
   update(dt: number): void {
@@ -402,8 +356,8 @@ export class FootballGame {
     if (this.phase === 'throw') {
       this.checkPass(dt);
     }
-    if (this.phase === 'yac') {
-      this.tickYac(dt);
+    if (this.phase === 'yac' && this.yac.tick(dt, this.qb())) {
+      this.endYac();
     }
     if (this.phase === 'presnap' && this.motionOn) {
       this.tickMotion(dt);
@@ -456,40 +410,11 @@ export class FootballGame {
 
   /** Receiver the called play is built to throw. */
   beatId(): string {
-    const id = PLAYS[this.playIdx].id;
-    if (id === 'flood' || id === 'mesh') {
-      return 'wrH';
-    }
-    return 'wrZ';
+    return beatId(PLAYS[this.playIdx]);
   }
 
   readHint(): string {
-    const play = PLAYS[this.playIdx].id;
-    const c3 = this.look.id === 'c3';
-    const c2 = this.look.id === 'c2';
-    if (c3 && play === 'smash') {
-      return 'CBs bail — hitch is hot';
-    }
-    if (c2 && play === 'smash') {
-      return 'CBs squat — audible Slants';
-    }
-    if (c2 && play === 'slants') {
-      return 'Slants vs Cover 2';
-    }
-    if (c3 && play === 'flood') {
-      return 'Flood the corner vs Cover 3';
-    }
-    if (play === 'mesh') {
-      return 'Throw the crossing mesh';
-    }
-    if (this.look.rush?.length) {
-      return 'Blitz look — find the hot route fast';
-    }
-    const hint = PLAYS[this.playIdx].hint;
-    if (hint) {
-      return hint;
-    }
-    return `${PLAYS[this.playIdx].name} vs ${this.look.name}`;
+    return readHint(PLAYS[this.playIdx], this.look);
   }
 
   score(): { home: number; away: number } {
@@ -536,15 +461,15 @@ export class FootballGame {
       away: this.drive.away,
       stickLos: this.sticks.los.position.z,
       stickFd: this.sticks.fd.position.z,
-      aim: this.aim,
-      carrier: this.carrier?.def.id ?? null,
-      breaker: this.breaker?.def.id ?? null,
-      front: this.frontDefender?.def.id ?? null,
-      tackler: this.tackler?.def.id ?? null,
-      lastTackler: this.lastTacklerId,
-      jukeState: this.jukeState,
-      jukeResult: this.lastJuke,
-      carrierDown: this.carrier?.isDown() ?? false,
+      aim: this.flight.aim,
+      carrier: this.yac.carrier?.def.id ?? null,
+      breaker: this.flight.breaker?.def.id ?? null,
+      front: this.yac.front?.def.id ?? null,
+      tackler: this.yac.tackler?.def.id ?? null,
+      lastTackler: this.yac.lastTacklerId,
+      jukeState: this.yac.state,
+      jukeResult: this.yac.lastJuke,
+      carrierDown: this.yac.isDown(),
       ballInAir: this.ball.inAir,
       ballSpeed: this.ball.vel.length(),
       ballHeight: this.ball.pos.y,
@@ -594,20 +519,7 @@ export class FootballGame {
     if (this.controlsQbRun()) {
       return 'ZQSD/WASD controls the QB all the way to the goal line.';
     }
-    switch (this.jukeState) {
-      case 'approach':
-        return 'Defender ahead slows YAC. A/Q or D calls the cut.';
-      case 'cut':
-        return 'Juke in progress — the outcome is not guaranteed.';
-      case 'escaped':
-        return 'Juke won. Trailing pursuit still has closing speed.';
-      case 'stuffed':
-        return 'Juke stuffed. Fight through contact and pursuit.';
-      case 'down':
-        return 'Tackled. The carrier is physically going to ground.';
-      default:
-        return 'Catch. Turn upfield before pursuit closes.';
-    }
+    return this.yac.status();
   }
 
   pocketLeft(): number {
@@ -661,11 +573,8 @@ export class FootballGame {
     }
     const s = this.situation(spot, power, overHold(this.charge.t));
     const ring = Math.max(0.55, spreadFor(s) / 0.92);
-    this.aimMark.visible = true;
-    this.aimMark.position.set(spot.x, 0.06, spot.z);
-    this.aimMark.scale.setScalar(ring);
-    const mat = this.aimMark.material as THREE.MeshBasicMaterial;
-    mat.color.setHex(s.overHold > 0 ? 0xff6b5b : 0xe8c547);
+    this.aimMark.place(spot);
+    this.aimMark.style(ring, s.overHold > 0);
   }
 
   private chargeSpot(target: ThrowTarget, power: number): Vec2 | null {
@@ -717,26 +626,11 @@ export class FootballGame {
     const to = new THREE.Vector3(x, 1.68, z);
     const time = flightTime(from, to) * shot.timeScale;
     const vel = ballisticVel(from, to, time);
-    this.shot = shot;
-    this.releaseSpot = { x: from.x, z: from.z };
-    this.throwT = 0;
-    this.tipT = 0;
-    this.tipped = false;
-    this.closest = null;
-    this.wrHandsOff = false;
-    this.incompMsg = 'INCOMPLETE';
-    this.aim = { x, z };
-    this.breaker = nearestEligible(shot.intended, this.eligibles());
-    this.cover.onThrow(this.breaker?.def.id ?? null);
-    this.aimMark.visible = true;
-    this.aimMark.scale.setScalar(1);
-    (this.aimMark.material as THREE.MeshBasicMaterial).color
-      .setHex(0xe8c547);
-    this.aimMark.position.set(
-      shot.intended.x,
-      0.06,
-      shot.intended.z
-    );
+    const breaker = nearestEligible(shot.intended, this.eligibles());
+    this.flight.launch(shot, { x: from.x, z: from.z }, breaker);
+    this.cover.onThrow(breaker?.def.id ?? null);
+    this.aimMark.place(shot.intended);
+    this.aimMark.style(1, false);
     this.ball.launch(this.scene, from, vel);
     this.flightPeak = from.y;
     this.qb().lockAnim('throw', 0.46);
@@ -756,8 +650,8 @@ export class FootballGame {
   }
 
   private tickActors(dt: number, live: boolean): void {
-    const aim = this.aim;
     const qb = this.qb();
+    const carrier = this.yac.carrier;
     if (this.phase === 'play' && this.scrambling()) {
       const to = {
         x: qb.x + this.stickX * 5,
@@ -771,23 +665,22 @@ export class FootballGame {
     for (const p of this.players) {
       const line = p.def.pos === 'OL' || p.def.pos === 'DL';
       const db = isCoverage(p.def.pos);
-      if (this.phase === 'yac' && this.carrier === p) {
-        this.moveCarrier(p, dt);
+      if (this.phase === 'yac' && carrier === p) {
+        this.yac.move(dt, qb, { x: this.stickX, z: this.stickZ });
         continue;
       }
-      if (this.phase === 'yac' && this.tackler === p) {
-        this.poseTackler(p);
+      if (this.phase === 'yac' && this.yac.tackler === p) {
+        this.yac.poseTackler();
         continue;
       }
       if (p === qb && this.phase === 'play' && this.scrambling()) {
         continue;
       }
-      if (this.phase === 'throw' && p.def.eligible && aim) {
-        if (this.shouldBreak(p)) {
-          // Break on the called spot, then track the real ball.
-          const read = this.throwT >= BALL_READ_DELAY;
-          const to = read || !this.shot ? aim : this.shot.intended;
-          p.chase(to, dt, read ? 6.7 : 7.65);
+      if (this.phase === 'throw' && this.flight.breaker === p) {
+        // Break on the called spot, then track the real ball.
+        const run = this.flight.breakTarget();
+        if (run) {
+          p.chase(run.to, dt, run.speed);
           continue;
         }
       }
@@ -798,213 +691,15 @@ export class FootballGame {
     }
     if (this.phase === 'play') {
       this.cover.cover(dt);
-    } else if (this.phase === 'throw' && this.aim) {
-      this.cover.breakOn(dt, this.aim);
-    } else if (this.phase === 'yac' && this.carrier && !this.tackler) {
-      this.cover.chaseCarrier(dt, this.carrier);
+    } else if (this.phase === 'throw' && this.flight.aim) {
+      this.cover.breakOn(dt, this.flight.aim);
+    } else if (this.phase === 'yac' && carrier && !this.yac.tackler) {
+      this.cover.chaseCarrier(dt, carrier);
     }
-  }
-
-  private shouldBreak(p: PlayerActor): boolean {
-    return this.breaker === p;
-  }
-
-  private moveCarrier(wr: PlayerActor, dt: number): void {
-    if (wr.isDown()) {
-      wr.updateRagdoll(dt);
-      return;
-    }
-    if (wr === this.qb()) {
-      this.moveQbCarrier(wr, dt);
-      return;
-    }
-    if (this.jukeState === 'cut' && this.jukeTarget) {
-      wr.chase(this.jukeTarget, dt, this.carrierSpeed(wr));
-      return;
-    }
-    wr.advance(dt, this.carrierSpeed(wr));
-  }
-
-  private moveQbCarrier(qb: PlayerActor, dt: number): void {
-    const length = Math.hypot(this.stickX, this.stickZ);
-    if (length < 0.2) {
-      qb.coast(dt);
-      return;
-    }
-    const x = this.stickX / Math.max(1, length);
-    const z = this.stickZ / Math.max(1, length);
-    const target = {
-      x: qb.x + x * 5,
-      z: qb.z + z * 5
-    };
-    qb.chase(target, dt, QB_RUN_SPEED);
-  }
-
-  private carrierSpeed(wr: PlayerActor): number {
-    if (this.jukeState === 'cut') {
-      return this.lastJuke === 'won' ? 5.85 : 4.35;
-    }
-    if (this.jukeState === 'stuffed') {
-      return this.jukeT < 0.9 ? 4.65 : 6.35;
-    }
-    if (this.jukeState === 'escaped' && this.jukeT < 0.45) {
-      return 6.25;
-    }
-    const front = this.frontDefender;
-    if (this.jukeState !== 'approach' || !front) {
-      return YAC_SPEED;
-    }
-    const distance = xzDist(wr, front);
-    const factor = clamp(0.62 + distance * 0.065, 0.68, 1);
-    return YAC_SPEED * factor;
-  }
-
-  private poseTackler(tackler: PlayerActor): void {
-    const carrier = this.carrier;
-    if (!carrier) {
-      return;
-    }
-    tackler.facePoint(carrier);
-    const progress = clamp(this.tackleT / 0.62, 0, 1);
-    tackler.setAnim('tackle', progress, 0);
-    tackler.place();
-  }
-
-  private updateJuke(wr: PlayerActor): void {
-    const front = this.frontDefender;
-    if (this.jukeState === 'approach' && !front) {
-      this.jukeState = 'none';
-      return;
-    }
-    if (this.jukeState === 'approach' && front &&
-        this.yacT >= 0.38 &&
-        xzDist(wr, front) <= JUKE_RANGE) {
-      this.beginJuke(wr);
-      return;
-    }
-    if (this.jukeState !== 'cut' || this.jukeT < JUKE_TIME) {
-      return;
-    }
-    const won = this.lastJuke === 'won';
-    this.jukeState = won ? 'escaped' : 'stuffed';
-    this.jukeT = 0;
-    this.frontMissT = won ? 1.05 : 0.3;
-    if (won) {
-      front?.lockAnim('stumble', 0.78);
-    }
-    this.toast?.(won ? 'JUKE WON' : 'JUKE STUFFED', !won);
-  }
-
-  private beginJuke(wr: PlayerActor): void {
-    if (this.jukeState !== 'approach') {
-      return;
-    }
-    const direction = this.jukeDirection(wr);
-    const won = Math.random() < JUKE_CHANCE;
-    const width = won ? 2.75 : 1.05;
-    const gain = won ? 2.55 : 1.25;
-    this.lastJuke = won ? 'won' : 'stuffed';
-    this.jukeState = 'cut';
-    this.jukeT = 0;
-    this.jukeTarget = {
-      x: clamp(
-        wr.x + direction * width,
-        -HALF_W + 0.8,
-        HALF_W - 0.8
-      ),
-      z: wr.z + gain
-    };
-    wr.lockAnim('juke', JUKE_TIME);
-    const side = direction < 0 ? 'LEFT' : 'RIGHT';
-    this.toast?.(`JUKE ${side}`, false);
-  }
-
-  private jukeDirection(wr: PlayerActor): number {
-    if (this.requestedJuke !== 0) {
-      return this.requestedJuke;
-    }
-    const front = this.frontDefender;
-    if (front && Math.abs(front.x - wr.x) > 0.2) {
-      return front.x > wr.x ? -1 : 1;
-    }
-    return wr.x > 0 ? -1 : 1;
-  }
-
-  private startTackle(
-    wr: PlayerActor,
-    tackler: PlayerActor
-  ): void {
-    this.tackler = tackler;
-    this.lastTacklerId = tackler.def.id;
-    this.tackleT = 0;
-    this.jukeState = 'down';
-    this.frontMissT = 0;
-    wr.startRagdoll(tackler);
-    tackler.facePoint(wr);
-    tackler.lockAnim('tackle', 0.72);
-    this.toast?.(`TACKLED · #${tackler.def.number}`, true);
-  }
-
-  private tickYac(dt: number): void {
-    const wr = this.carrier;
-    if (!wr) {
-      return;
-    }
-    this.yacT += dt;
-    this.jukeT += dt;
-    this.frontMissT = Math.max(0, this.frontMissT - dt);
-    if (wr.isDown()) {
-      this.tackleT += dt;
-      if (this.tackleT >= TACKLE_SETTLE_TIME) {
-        this.endYac();
-      }
-      return;
-    }
-    this.updateJuke(wr);
-    wr.x = clamp(wr.x, -HALF_W + 0.35, HALF_W - 0.35);
-    if (wr.z >= GOAL_Z) {
-      this.endYac();
-      return;
-    }
-    if (Math.abs(wr.x) >= HALF_W - 0.4) {
-      this.endYac();
-      return;
-    }
-    const tackler = this.findTackler(wr);
-    if (tackler) {
-      this.startTackle(wr, tackler);
-      return;
-    }
-    if (wr !== this.qb() && this.yacT >= RECEIVER_YAC_TIME) {
-      this.endYac();
-    }
-  }
-
-  private findTackler(wr: PlayerActor): PlayerActor | null {
-    const catchBalance = this.jukeState === 'approach' &&
-      this.yacT < 0.38;
-    if (this.jukeState === 'cut' || catchBalance) {
-      return null;
-    }
-    let tackler: PlayerActor | null = null;
-    let distance = TACKLE_RANGE;
-    for (const p of this.players) {
-      if (!isCoverage(p.def.pos)) {
-        continue;
-      }
-      const frontMiss = p === this.frontDefender &&
-        this.frontMissT > 0;
-      const next = xzDist(wr, p);
-      if (!frontMiss && next < distance) {
-        tackler = p;
-        distance = next;
-      }
-    }
-    return tackler;
   }
 
   private endYac(): void {
-    const wr = this.carrier!;
+    const wr = this.yac.carrier!;
     wr.x = clamp(wr.x, -HALF_W + 0.4, HALF_W - 0.4);
     const r = this.drive.gainTo(wr.z);
     if (r === 'td') {
@@ -1030,29 +725,12 @@ export class FootballGame {
     }
     this.phase = 'presnap';
     this.clock = 0;
-    this.yacT = 0;
-    this.jukeT = 0;
-    this.tackleT = 0;
-    this.frontMissT = 0;
-    this.jukeState = 'none';
-    this.frontDefender = null;
-    this.tackler = null;
-    this.jukeTarget = null;
-    this.requestedJuke = 0;
     this.whistleT = 0;
-    this.carrier = null;
-    this.breaker = null;
-    this.aim = null;
-    this.aimMark.visible = false;
-    this.aimMark.scale.setScalar(1);
+    this.yac.clear();
+    this.flight.clear();
+    this.aimMark.hide();
+    this.aimMark.style(1, false);
     this.charge = null;
-    this.shot = null;
-    this.releaseSpot = null;
-    this.throwT = 0;
-    this.tipT = 0;
-    this.tipped = false;
-    this.wrHandsOff = false;
-    this.incompMsg = 'INCOMPLETE';
     this.motionOn = false;
     this.motionIdx = 0;
     this.look = pickLook();
@@ -1083,13 +761,6 @@ export class FootballGame {
       this.players.push(actor);
       this.byId.set(def.id, actor);
       this.scene.add(actor.mesh);
-      if (def.eligible && def.route) {
-        const line = routeGhost(def.start, def.route);
-        line.visible = false;
-        this.routeLines.push(line);
-        this.ghosts.set(def.id, line);
-        this.scene.add(line);
-      }
     }
     this.placeBall();
   }
@@ -1100,9 +771,7 @@ export class FootballGame {
   }
 
   private setRoutes(on: boolean): void {
-    for (const line of this.ghosts.values()) {
-      line.visible = on;
-    }
+    this.ghosts.setVisible(on);
   }
 
   private qb(): PlayerActor {
@@ -1151,139 +820,37 @@ export class FootballGame {
   }
 
   private checkPass(dt: number): void {
-    const b = this.ball;
-    this.throwT += dt;
-    if (Math.abs(b.pos.x) > HALF_W + 0.2) {
-      this.deadIncomp('OUT OF BOUNDS');
-      return;
-    }
-    if (!b.inAir) {
-      this.deadIncomp(this.incompMsg);
-      return;
-    }
-    if (this.tipT > 0) {
-      this.tipT -= dt;
-      return;
-    }
-    if (b.pos.y < CATCH_HEIGHT_MIN || b.pos.y > CATCH_HEIGHT_MAX) {
-      return;
-    }
-    const wr = this.catchWindow();
-    const db = this.ballHawk();
-    const toWr = wr ? xzDist(wr, b.pos) : null;
-    const toDb = db ? xzDist(db, b.pos) : null;
-    if (!this.atClosest(toWr, toDb)) {
-      return;
-    }
-    const outcome = contest({
-      ballSpeed: b.vel.length(),
-      wrDist: toWr,
-      dbDist: toDb,
-      sep: wr && db ? xzDist(wr, db) : 99,
-      power: this.shot?.power ?? TAP_POWER,
-      tipped: this.tipped
-    });
-    if (!outcome) {
-      return;
-    }
-    if (outcome === 'pick' && db) {
-      this.intercept(db);
-      return;
-    }
-    if (outcome === 'breakup') {
-      this.tipBall(3.4, 'BROKEN UP');
-      db?.lockAnim('catch', 0.3);
-      return;
-    }
-    if (outcome === 'drop') {
-      this.wrHandsOff = true;
-      this.tipBall(1.8, 'DROPPED');
-      wr?.lockAnim('stumble', 0.5);
-      return;
-    }
-    if (wr) {
-      this.resolveCatch(wr);
-    }
-  }
-
-  /**
-   * Resolve at the moment of contact, not at the edge of the
-   * catch radius: wait until the ball is in the hands, or has
-   * stopped getting closer, or is about to hit the grass.
-   */
-  private atClosest(toWr: number | null, toDb: number | null): boolean {
-    const near = Math.min(toWr ?? 99, toDb ?? 99);
-    if (near > CATCH_RADIUS) {
-      this.closest = null;
-      return false;
-    }
-    const b = this.ball;
-    const landing = b.vel.y < 0 && b.pos.y < CATCH_HEIGHT_MIN + 0.3;
-    const passing = this.closest !== null && near > this.closest + 0.01;
-    this.closest = near;
-    return near <= 0.8 || passing || landing;
-  }
-
-  private catchWindow(): PlayerActor | null {
-    const b = this.ball;
-    if (this.wrHandsOff) {
-      return null;
-    }
-    if (!this.tipped && this.aim && xzDist(b.pos, this.aim) > 3.4) {
-      return null;
-    }
-    let best: PlayerActor | null = null;
-    let dist = CATCH_RADIUS;
-    for (const p of this.eligibles()) {
-      if (p === this.qb()) {
-        continue;
-      }
-      const n = xzDist(p, b.pos);
-      if (n <= dist) {
-        dist = n;
-        best = p;
-      }
-    }
-    return best;
-  }
-
-  /** Coverage defender at the ball (can undercut anywhere). */
-  private ballHawk(): PlayerActor | null {
-    const b = this.ball;
-    const from = this.releaseSpot;
-    if (from && xzDist(b.pos, from) < 3) {
-      return null;
-    }
-    const cover = this.players.filter((p) =>
-      isCoverage(p.def.pos) && !isPassRusher(p.def.id)
+    const r = this.flight.tick(
+      dt,
+      this.ball,
+      this.eligibles(),
+      this.players,
+      this.qb()
     );
-    const db = closestDefender(b.pos, cover);
-    if (!db || xzDist(db, b.pos) > 1.35) {
-      return null;
+    switch (r.kind) {
+      case 'incomplete':
+        this.deadIncomp(r.msg);
+        return;
+      case 'tipped':
+        this.aimMark.hide();
+        this.toast?.(r.msg, true);
+        return;
+      case 'pick':
+        this.intercept(r.db);
+        return;
+      case 'catch':
+        this.resolveCatch(r.wr);
+        return;
+      default:
+        return;
     }
-    return db;
-  }
-
-  /** Ball pops off hands: it stays live but wild. */
-  private tipBall(up: number, msg: string): void {
-    const v = this.ball.vel;
-    v.x = v.x * -0.2 + (Math.random() - 0.5) * 3;
-    v.z = v.z * 0.15 + (Math.random() - 0.5) * 3;
-    v.y = up + Math.random() * 1.2;
-    this.tipped = true;
-    this.closest = null;
-    this.tipT = TIP_COOLDOWN;
-    this.incompMsg = msg;
-    this.aim = { x: this.ball.pos.x, z: this.ball.pos.z };
-    this.aimMark.visible = false;
-    this.toast?.(msg, true);
   }
 
   private intercept(db: PlayerActor): void {
     db.lockAnim('catch', 0.5);
     this.ball.inAir = false;
     this.ball.hold(db.rig.rightHand);
-    this.aimMark.visible = false;
+    this.aimMark.hide();
     this.drive.turnover();
     this.turnoverText = 'Intercepted';
     this.finishDrive(
@@ -1294,13 +861,13 @@ export class FootballGame {
   }
 
   private resolveCatch(wr: PlayerActor): void {
-    this.prepareYac(wr);
+    this.yac.start(wr);
     wr.lockAnim('catch', 0.32);
     this.ball.inAir = false;
     this.ball.hold(wr.rig.rightHand);
     this.phase = 'yac';
     this.madden.setPhase('throw');
-    this.aimMark.visible = false;
+    this.aimMark.hide();
     this.toast?.('COMPLETE', false);
   }
 
@@ -1333,7 +900,7 @@ export class FootballGame {
     this.phase = phase;
     this.whistleT = 0;
     this.madden.setPhase('dead');
-    this.aimMark.visible = false;
+    this.aimMark.hide();
     this.setRoutes(false);
     this.toast?.(msg, bad);
     this.overFn?.(this.drive.won ? 'win' : 'loss');
@@ -1343,17 +910,16 @@ export class FootballGame {
     this.phase = 'whistle';
     this.whistleT = 0;
     this.madden.setPhase('dead');
-    this.aimMark.visible = false;
+    this.aimMark.hide();
     this.setRoutes(false);
     this.toast?.(msg, bad);
   }
 
   private followCam(dt: number, live: boolean): void {
-    this.madden.setPunch(
-      this.phase === 'yac' && Boolean(this.carrier?.isDown())
-    );
-    if (this.phase === 'yac' && this.carrier) {
-      this.madden.follow(this.carrier.x, this.carrier.z, dt);
+    const carrier = this.yac.carrier;
+    this.madden.setPunch(this.phase === 'yac' && this.yac.isDown());
+    if (this.phase === 'yac' && carrier) {
+      this.madden.follow(carrier.x, carrier.z, dt);
       return;
     }
     if (live) {
@@ -1423,67 +989,18 @@ export class FootballGame {
 
   private startQbRun(): void {
     const qb = this.qb();
-    this.prepareYac(qb);
-    this.frontDefender = null;
-    this.jukeState = 'none';
+    this.yac.startScramble(qb);
     this.phase = 'yac';
     this.ball.hold(qb.rig.rightHand);
     this.madden.setPhase('throw');
     this.toast?.('SCRAMBLE', false);
   }
 
-  private prepareYac(carrier: PlayerActor): void {
-    this.carrier = carrier;
-    this.frontDefender = this.pickFrontDefender(carrier);
-    this.jukeState = this.frontDefender ? 'approach' : 'none';
-    this.lastJuke = null;
-    this.tackler = null;
-    this.jukeTarget = null;
-    this.requestedJuke = 0;
-    this.yacT = 0;
-    this.jukeT = 0;
-    this.tackleT = 0;
-    this.frontMissT = 0;
-  }
-
-  private pickFrontDefender(
-    carrier: PlayerActor
-  ): PlayerActor | null {
-    let best: PlayerActor | null = null;
-    let score = 99;
-    for (const defender of this.players) {
-      if (!isCoverage(defender.def.pos)) {
-        continue;
-      }
-      const angleCost = Math.abs(defender.x - carrier.x) * 0.18;
-      const behind = Math.max(0, carrier.z - defender.z) * 0.45;
-      const next = xzDist(carrier, defender) + angleCost + behind;
-      if (next < score) {
-        best = defender;
-        score = next;
-      }
-    }
-    return best;
-  }
-
   private rebuildGhosts(): void {
-    const shift = this.drive.losZ - LOS_Z;
-    for (const id of THROW_ORDER) {
-      const p = this.byId.get(id);
-      const old = this.ghosts.get(id);
-      if (old) {
-        this.scene.remove(old);
-        old.geometry.dispose();
-      }
-      if (!p?.def.route) {
-        continue;
-      }
-      const line = routeGhost(p.def.start, p.def.route);
-      line.position.z = shift;
-      line.visible = true;
-      this.ghosts.set(id, line);
-      this.scene.add(line);
-    }
+    const receivers = THROW_ORDER
+      .map((id) => this.byId.get(id))
+      .filter((p): p is PlayerActor => Boolean(p));
+    this.ghosts.rebuild(receivers, this.drive.losZ - LOS_Z);
   }
 
   private groundAt(cx: number, cy: number): Vec2 | null {
@@ -1503,75 +1020,3 @@ export class FootballGame {
   }
 }
 
-function makeRenderer(canvas: HTMLCanvasElement): THREE.WebGLRenderer {
-  const r = new THREE.WebGLRenderer({
-    canvas,
-    antialias: true,
-    alpha: false
-  });
-  r.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  r.shadowMap.enabled = true;
-  r.shadowMap.type = THREE.PCFSoftShadowMap;
-  r.toneMapping = THREE.ACESFilmicToneMapping;
-  r.toneMappingExposure = 1.12;
-  r.outputColorSpace = THREE.SRGBColorSpace;
-  return r;
-}
-
-function addLights(scene: THREE.Scene): void {
-  const hemi = new THREE.HemisphereLight(0xc5d7ea, 0x2a4a28, 0.85);
-  const sun = new THREE.DirectionalLight(0xffe2b8, 1.35);
-  sun.position.set(-35, 48, -10);
-  sun.castShadow = true;
-  sun.shadow.mapSize.set(2048, 2048);
-  sun.shadow.camera.near = 4;
-  sun.shadow.camera.far = 140;
-  sun.shadow.camera.left = -50;
-  sun.shadow.camera.right = 50;
-  sun.shadow.camera.top = 50;
-  sun.shadow.camera.bottom = -50;
-  scene.add(hemi, sun);
-}
-
-function flightTime(
-  from: THREE.Vector3,
-  to: THREE.Vector3
-): number {
-  const dist = Math.hypot(to.x - from.x, to.z - from.z);
-  return clamp(dist / THROW_SPEED + 0.18, 0.52, 1.72);
-}
-
-function makeAimMark(): THREE.Mesh {
-  const m = new THREE.Mesh(
-    new THREE.RingGeometry(0.5, 0.92, 28),
-    new THREE.MeshBasicMaterial({
-      color: 0xe8c547,
-      transparent: true,
-      opacity: 0.88,
-      depthWrite: false
-    })
-  );
-  m.rotation.x = -Math.PI / 2;
-  m.visible = false;
-  return m;
-}
-
-function routeGhost(
-  start: { x: number; z: number },
-  route: Array<{ x: number; z: number }>
-): THREE.Line {
-  const pts = [start, ...route].map(
-    (p) => new THREE.Vector3(p.x, 0.08, p.z)
-  );
-  const geo = new THREE.BufferGeometry().setFromPoints(pts);
-  const mat = new THREE.LineDashedMaterial({
-    color: 0xe8c547,
-    dashSize: 0.55,
-    gapSize: 0.32,
-    transparent: true,
-    opacity: 0.7
-  });
-  const line = new THREE.Line(geo, mat);
-  line.computeLineDistances();
-  return line;
-}
