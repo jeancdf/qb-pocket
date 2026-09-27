@@ -174,7 +174,6 @@ function paintHud(): void {
   hud.setLiveChrome(
     game.phase === 'presnap' || game.phase === 'whistle'
   );
-  hud.setPocket(game.pocketLeft(), game.phase === 'play');
   const call = game.callSheet();
   hud.setDrive(
     game.downLine(),

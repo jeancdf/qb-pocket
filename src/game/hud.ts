@@ -15,7 +15,6 @@ export class Hud {
   private statusEl: HTMLElement;
   private snapBtn: HTMLButtonElement;
   private toastEl: HTMLElement;
-  private pocketEl: HTMLElement;
   private downEl: HTMLElement;
   private playEl: HTMLElement;
   private yardsEl: HTMLElement;
@@ -39,7 +38,6 @@ export class Hud {
     this.statusEl = el('status');
     this.snapBtn = el('snap-btn') as HTMLButtonElement;
     this.toastEl = el('toast');
-    this.pocketEl = el('pocket');
     this.downEl = el('down-line');
     this.playEl = el('play-chip');
     this.yardsEl = el('yards-chip');
@@ -80,13 +78,6 @@ export class Hud {
     this.snapBtn.disabled = !on;
   }
 
-  setPocket(left: number, live: boolean): void {
-    if (!live) {
-      this.pocketEl.textContent = '';
-      return;
-    }
-    this.pocketEl.textContent = `POCKET ${left.toFixed(1)}s`;
-  }
 
   toast(text: string, bad: boolean): void {
     if (this.toastTimer !== null) {

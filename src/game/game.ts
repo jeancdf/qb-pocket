@@ -6,8 +6,7 @@ import {
   GOAL_Z,
   HALF_W,
   LOS_Z,
-  SACK_RANGE,
-  SACK_TIME
+  SACK_RANGE
 } from './constants';
 import {
   COVER3,
@@ -522,13 +521,6 @@ export class FootballGame {
     return this.yac.status();
   }
 
-  pocketLeft(): number {
-    if (this.phase !== 'play') {
-      return 0;
-    }
-    return Math.max(0, SACK_TIME - this.clock);
-  }
-
   /**
    * The QB's eyes: cursor hover, or the receiver he is winding
    * up on. Play-action turns him to the RB for the fake first.
@@ -797,24 +789,15 @@ export class FootballGame {
     }
   }
 
+  /** A sack needs a rusher to actually reach the QB: no pocket timer. */
   private checkSack(): void {
     const qb = this.qb();
-    const ends = passRushers().map((id) => this.byId.get(id));
-    const hit = ends.some(
-      (d) => d && xzDist(qb, d) < SACK_RANGE
-    );
-    if (hit) {
-      this.deadSack();
-      return;
-    }
-    if (this.scrambling()) {
-      return;
-    }
-    if (this.clock < 2.85) {
-      return;
-    }
-    if (this.clock >= SACK_TIME) {
-      this.deadSack();
+    for (const id of passRushers()) {
+      const d = this.byId.get(id);
+      if (d && xzDist(qb, d) < SACK_RANGE) {
+        this.deadSack(d);
+        return;
+      }
     }
   }
 
@@ -881,8 +864,12 @@ export class FootballGame {
     this.blow(msg, true);
   }
 
-  private deadSack(): void {
-    const r = this.drive.sackAt(this.qb().z);
+  private deadSack(by: PlayerActor): void {
+    const qb = this.qb();
+    by.facePoint(qb);
+    by.lockAnim('tackle', 0.72);
+    qb.startRagdoll(by);
+    const r = this.drive.sackAt(qb.z);
     if (r === 'turnover') {
       this.drive.turnover();
       this.finishDrive('TURNOVER ON DOWNS', true, 'turnover');
