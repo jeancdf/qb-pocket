@@ -4,14 +4,18 @@ import { clamp, lerp } from './math';
 
 export type CamPhase = 'presnap' | 'play' | 'throw' | 'dead';
 
-// Low 3/4 sideline: shallow pitch, tracks the pocket.
-const FOV = 50;
-const HEIGHT = 7.6;
-const BACK = 18.4;
-const SIDE = 14.8;
-const LOOK_AHEAD = 4.6;
-const LOOK_Y = 1.15;
-const THROW_AHEAD = 2.8;
+// Behind the QB, in line with the field (+z downfield).
+// The camera never yaws: it slides on x with the QB and
+// always looks straight up the field. Don't add a side
+// offset here, it turns the whole view diagonal.
+const FOV = 55;
+const HEIGHT = 6.4;
+const BACK = 11.5;
+const LOOK_AHEAD = 9;
+const LOOK_Y = 1.2;
+const THROW_AHEAD = 3;
+const PUNCH_ZOOM = 1.32;
+const PUNCH_RATE = 5.5;
 const ZOOM_MIN = 0.72;
 const ZOOM_MAX = 1.38;
 const FOLLOW = 3.8;
@@ -28,6 +32,7 @@ export class MaddenCamera {
   private ahead = LOOK_AHEAD;
   private losZ = LOS_Z;
   private attached = false;
+  private punch = false;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -74,16 +79,26 @@ export class MaddenCamera {
     this.ahead = lerp(this.ahead, LOOK_AHEAD + extra, k);
   }
 
+  /** Tight zoom while a tackle lands. */
+  setPunch(on: boolean): void {
+    this.punch = on;
+  }
+
   reset(): void {
     this.phase = 'presnap';
     this.zoom = 1;
+    this.punch = false;
     this.subjectX = 0;
     this.subjectZ = this.losZ - POCKET_BACK;
     this.ahead = LOOK_AHEAD;
     this.writePose();
   }
 
-  update(): void {
+  update(dt: number): void {
+    const target = this.punch ? PUNCH_ZOOM : 1;
+    const k = 1 - Math.exp(-dt * PUNCH_RATE);
+    this.cam.zoom = lerp(this.cam.zoom, target, k);
+    this.cam.updateProjectionMatrix();
     this.writePose();
   }
 
@@ -95,7 +110,7 @@ export class MaddenCamera {
     const lookZ = this.subjectZ + this.ahead;
     this.look.set(this.subjectX, LOOK_Y, lookZ);
     this.cam.position.set(
-      this.look.x + SIDE * this.zoom,
+      this.look.x,
       this.look.y + HEIGHT * this.zoom,
       this.look.z - BACK * this.zoom
     );
