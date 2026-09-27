@@ -7,8 +7,11 @@ const FLIGHT_SIMULATION_STEP = 1 / 120;
 const VELOCITY_CORRECTION_PASSES = 4;
 /** The ball's long axis (nose) in its own space. */
 const LONG_AXIS = new THREE.Vector3(1, 0, 0);
-/** Spiral spin, radians per (yd/s · s): ~6 rev/s on a bullet. */
-const SPIRAL_SPIN_PER_SPEED = 1.6;
+/**
+ * Spiral spin, radians per (yd/s · s): ~3 rev/s on a bullet. A
+ * real ~10 rev/s strobes at 60 fps and reads as a still ball.
+ */
+const SPIRAL_SPIN_PER_SPEED = 0.75;
 /** How fast the nose settles onto the flight path. */
 const NOSE_FOLLOW = 18;
 
@@ -174,18 +177,57 @@ function buildBall(): { root: THREE.Group; spinner: THREE.Group } {
   );
   body.scale.set(1.55, 0.92, 0.92);
   body.castShadow = true;
-  const stripe = new THREE.Mesh(
-    new THREE.TorusGeometry(0.12, 0.012, 6, 18),
-    new THREE.MeshStandardMaterial({ color: COLORS.white })
-  );
-  stripe.rotation.y = Math.PI / 2;
-  const lace = new THREE.Mesh(
-    new THREE.BoxGeometry(0.12, 0.012, 0.03),
-    new THREE.MeshStandardMaterial({ color: COLORS.white })
-  );
-  lace.position.set(0, 0.12, 0);
-  g.add(body, stripe, lace);
+  const white = new THREE.MeshStandardMaterial({
+    color: COLORS.white,
+    roughness: 0.45,
+    metalness: 0.04
+  });
+  g.add(body);
+  addEndStripes(g, white);
+  addLaces(g, white);
   root.add(g);
   root.scale.setScalar(BALL_VISUAL_SCALE);
   return { root, spinner: g };
+}
+
+/** White bands near each tip, around the long axis. */
+function addEndStripes(
+  parent: THREE.Group,
+  mat: THREE.Material
+): void {
+  for (const x of [-0.14, 0.14]) {
+    // Leather radius at |x| = 0.14 on a 0.2325 × 0.138 ellipsoid.
+    const r = 0.138 * Math.sqrt(1 - (x / 0.2325) ** 2);
+    const stripe = new THREE.Mesh(
+      new THREE.TorusGeometry(r + 0.002, 0.011, 6, 24),
+      mat
+    );
+    stripe.rotation.y = Math.PI / 2;
+    stripe.position.x = x;
+    parent.add(stripe);
+  }
+}
+
+/**
+ * Lace seam on top: a white spine along the long axis and eight
+ * cross stitches, sitting proud of the leather (top ≈ 0.138) so
+ * they flash round as the ball spirals.
+ */
+function addLaces(parent: THREE.Group, mat: THREE.Material): void {
+  const spine = new THREE.Mesh(
+    new THREE.BoxGeometry(0.19, 0.012, 0.022),
+    mat
+  );
+  spine.position.set(0, 0.141, 0);
+  parent.add(spine);
+  for (let i = 0; i < 8; i += 1) {
+    const x = -0.07 + i * 0.02;
+    const top = 0.138 * Math.sqrt(1 - (x / 0.2325) ** 2);
+    const stitch = new THREE.Mesh(
+      new THREE.BoxGeometry(0.009, 0.014, 0.06),
+      mat
+    );
+    stitch.position.set(x, top + 0.006, 0);
+    parent.add(stitch);
+  }
 }
