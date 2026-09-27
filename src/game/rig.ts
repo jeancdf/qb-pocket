@@ -1,5 +1,11 @@
 import * as THREE from 'three';
-import { numberTexture, type TeamMats } from './materials';
+import type { TeamMats } from './materials';
+import {
+  dressArm,
+  dressLeg,
+  dressPelvis,
+  dressTorso
+} from './player-model';
 import type { PlayerDef, Pos } from './types';
 import { blendPose } from './pose-blend';
 
@@ -72,22 +78,42 @@ export function buildRig(
   def: PlayerDef,
   mats: TeamMats
 ): { root: THREE.Group; rig: PlayerRig } {
-  const kit = playerKit(mats, def.number);
   const root = new THREE.Group();
   root.userData.id = def.id;
   root.scale.setScalar(SCALE);
   const bulk = def.pos === 'OL' || def.pos === 'DL';
+  const limbs = { thigh: THIGH, shin: SHIN, upper: UPPER, fore: FORE };
   const pelvis = new THREE.Group();
   pelvis.position.y = HIP;
   root.add(pelvis);
-  addPants(pelvis, kit, bulk, def);
-  const { torso, neck } = addTorso(pelvis, kit, def, bulk);
-  const ax = bulk ? 0.36 : 0.32;
-  const hx = bulk ? 0.14 : 0.12;
-  const left = addArm(pelvis, -ax, kit, bulk);
-  const right = addArm(pelvis, ax, kit, bulk);
-  const lLeg = addLeg(pelvis, -hx, kit, bulk);
-  const rLeg = addLeg(pelvis, hx, kit, bulk);
+  dressPelvis(pelvis, mats, bulk, def);
+  const torso = new THREE.Group();
+  torso.position.y = 0.08;
+  const neck = new THREE.Group();
+  neck.position.y = 0.56;
+  torso.add(neck);
+  pelvis.add(torso);
+  dressTorso(torso, neck, mats, bulk, def);
+  const ax = bulk ? 0.34 : 0.3;
+  const hx = bulk ? 0.12 : 0.1;
+  const arm = (x: number) => {
+    const g = joint(pelvis, x, ARM_Y);
+    const fore = joint(g, 0, -UPPER);
+    const hand = joint(fore, 0, -FORE);
+    dressArm(g, fore, hand, mats, bulk, limbs, x < 0 ? 1 : -1);
+    return { arm: g, fore, hand };
+  };
+  const leg = (x: number) => {
+    const thigh = joint(pelvis, x, 0);
+    const shin = joint(thigh, 0, -THIGH);
+    const foot = joint(shin, 0, -SHIN);
+    dressLeg(thigh, shin, foot, mats, bulk, limbs);
+    return { thigh, shin, foot };
+  };
+  const left = arm(-ax);
+  const right = arm(ax);
+  const lLeg = leg(-hx);
+  const rLeg = leg(hx);
   const rig: PlayerRig = {
     pos: def.pos,
     pelvis,
@@ -113,11 +139,11 @@ export function buildRig(
   return { root, rig };
 }
 
-function playerKit(mats: TeamMats, number: number): TeamMats {
-  const tones = [0x5a3524, 0x8d552f, 0xb97850, 0xd49a73];
-  const skin = mats.skin.clone();
-  skin.color.setHex(tones[number % tones.length]);
-  return { ...mats, skin };
+function joint(parent: THREE.Object3D, x: number, y: number): THREE.Group {
+  const g = new THREE.Group();
+  g.position.set(x, y, 0);
+  parent.add(g);
+  return g;
 }
 
 export function poseRig(
@@ -834,418 +860,6 @@ function engagePose(t: number): Pose {
     hop: 0,
     shift: shove * 0.05
   };
-}
-
-function addPants(
-  pelvis: THREE.Group,
-  mats: TeamMats,
-  bulk: boolean,
-  def: PlayerDef
-): void {
-  const hipR = bulk ? 0.125 : 0.105;
-  const bowl = capMesh(hipR, 0.18, mats.pants);
-  bowl.position.y = 0.02;
-  bowl.scale.set(bulk ? 1.7 : 1.5, 0.82, 1.18);
-  const belt = capMesh(hipR * 1.06, 0.1, mats.stripe);
-  belt.position.y = 0.09;
-  belt.scale.set(bulk ? 1.72 : 1.52, 0.28, 1.18);
-  const hr = bulk ? 0.09 : 0.074;
-  const lHip = sphMesh(hr, mats.pants, 10);
-  lHip.position.set(-0.11, -0.02, 0.01);
-  const rHip = sphMesh(hr, mats.pants, 10);
-  rHip.position.set(0.11, -0.02, 0.01);
-  pelvis.add(bowl, belt, lHip, rHip, hipPads(mats, bulk));
-  if (def.pos === 'QB') {
-    pelvis.add(qbTowel(mats));
-  }
-}
-
-function hipPads(mats: TeamMats, bulk: boolean): THREE.Group {
-  const pads = new THREE.Group();
-  const x = bulk ? 0.18 : 0.155;
-  for (const side of [-1, 1]) {
-    const pad = sphMesh(bulk ? 0.095 : 0.078, mats.pants, 10);
-    pad.position.set(side * x, -0.055, 0.055);
-    pad.scale.set(0.76, 1.2, 0.55);
-    pads.add(pad);
-  }
-  return pads;
-}
-
-function qbTowel(mats: TeamMats): THREE.Mesh {
-  const towel = new THREE.Mesh(
-    new THREE.PlaneGeometry(0.17, 0.33, 2, 3),
-    mats.stripe
-  );
-  towel.position.set(0, -0.18, -0.12);
-  towel.rotation.x = -0.16;
-  return towel;
-}
-
-function addTorso(
-  pelvis: THREE.Group,
-  mats: TeamMats,
-  def: PlayerDef,
-  bulk: boolean
-): { torso: THREE.Group; neck: THREE.Group } {
-  const torso = new THREE.Group();
-  torso.position.y = 0.08;
-  const coreR = bulk ? 0.155 : 0.132;
-  const core = capMesh(coreR, bulk ? 0.4 : 0.36, mats.jersey);
-  core.position.y = 0.22;
-  core.scale.set(bulk ? 1.28 : 1.12, 1, 0.8);
-  torso.add(core);
-  const collar = capMesh(0.072, 0.08, mats.jersey, 8);
-  collar.position.y = 0.5;
-  collar.scale.set(1.35, 0.42, 1.05);
-  torso.add(collar);
-  addPads(torso, mats, bulk);
-  addJerseyTrim(torso, mats, bulk);
-  const neck = new THREE.Group();
-  neck.position.y = 0.56;
-  const neckMesh = capMesh(0.05, 0.1, mats.skin, 8);
-  neckMesh.position.y = 0.04;
-  neck.add(neckMesh);
-  addHelmet(neck, mats);
-  torso.add(neck);
-  addNums(torso, def);
-  pelvis.add(torso);
-  return { torso, neck };
-}
-
-function addPads(
-  torso: THREE.Group,
-  mats: TeamMats,
-  bulk: boolean
-): void {
-  const pec = sphMesh(bulk ? 0.155 : 0.132, mats.jersey, 10);
-  pec.position.set(0, 0.33, 0.035);
-  pec.scale.set(bulk ? 1.45 : 1.28, 0.82, 0.92);
-  const yoke = capMesh(
-    bulk ? 0.1 : 0.082,
-    bulk ? 0.58 : 0.48,
-    mats.jersey
-  );
-  yoke.rotation.z = Math.PI / 2;
-  yoke.position.y = 0.41;
-  const padR = bulk ? 0.128 : 0.1;
-  const padX = bulk ? 0.29 : 0.235;
-  const lPad = sphMesh(padR, mats.jersey, 10);
-  lPad.position.set(-padX, 0.415, 0.02);
-  lPad.scale.set(1.16, 0.6, 1.18);
-  const rPad = sphMesh(padR, mats.jersey, 10);
-  rPad.position.set(padX, 0.415, 0.02);
-  rPad.scale.set(1.16, 0.6, 1.18);
-  torso.add(pec, yoke, lPad, rPad);
-}
-
-function addJerseyTrim(
-  torso: THREE.Group,
-  mats: TeamMats,
-  bulk: boolean
-): void {
-  const x = bulk ? 0.18 : 0.15;
-  for (const side of [-1, 1]) {
-    const seam = new THREE.Mesh(
-      new THREE.BoxGeometry(0.028, 0.3, 0.025),
-      mats.stripe
-    );
-    seam.position.set(side * x, 0.25, 0.12);
-    torso.add(seam);
-  }
-  const chest = new THREE.Mesh(
-    new THREE.BoxGeometry(bulk ? 0.36 : 0.31, 0.035, 0.03),
-    mats.stripe
-  );
-  chest.position.set(0, 0.38, 0.135);
-  torso.add(chest);
-}
-
-function addHelmet(neck: THREE.Group, mats: TeamMats): void {
-  const helm = new THREE.Group();
-  helm.position.y = 0.175;
-  const shell = sphMesh(0.152, mats.helmet, 14);
-  shell.scale.set(1.05, 1.02, 1.08);
-  const face = sphMesh(0.1, mats.skin, 10);
-  face.position.set(0, -0.028, 0.08);
-  face.scale.set(0.92, 0.8, 0.58);
-  const stripe = capMesh(0.018, 0.28, mats.stripe, 5);
-  stripe.rotation.x = Math.PI / 2;
-  stripe.position.set(0, 0.132, 0.01);
-  const visor = new THREE.Mesh(
-    new THREE.SphereGeometry(
-      0.148, 12, 8, 0, Math.PI * 2, 0.85, 0.45
-    ),
-    mats.visor
-  );
-  visor.position.set(0, 0.01, 0.045);
-  visor.scale.set(1.02, 0.82, 1.08);
-  const chin = new THREE.Mesh(
-    new THREE.TorusGeometry(0.1, 0.009, 4, 10, Math.PI),
-    mats.dark
-  );
-  chin.rotation.x = Math.PI / 2;
-  chin.position.set(0, -0.088, 0.04);
-  helm.add(shell, face, stripe, visor, chin);
-  addEars(helm, mats.dark);
-  addMask(helm, mats.metal);
-  neck.add(helm);
-}
-
-function addEars(helm: THREE.Group, mat: THREE.Material): void {
-  for (const x of [-1, 1]) {
-    const ear = sphMesh(0.032, mat, 6);
-    ear.position.set(x * 0.152, -0.008, 0.015);
-    helm.add(ear);
-  }
-}
-
-function addMask(helm: THREE.Group, mat: THREE.Material): void {
-  const r = 0.013;
-  const z = 0.2;
-  for (const y of [-0.048, -0.012, 0.024, 0.052]) {
-    const bar = rod(0.155, r, mat);
-    bar.rotation.z = Math.PI / 2;
-    bar.position.set(0, y, z);
-    helm.add(bar);
-  }
-  for (const x of [-0.07, 0.07]) {
-    const vert = rod(0.118, r, mat);
-    vert.position.set(x, 0.002, z);
-    helm.add(vert);
-    const post = rod(0.09, r, mat);
-    post.rotation.x = Math.PI / 2;
-    post.position.set(x, 0.035, z - 0.042);
-    helm.add(post);
-  }
-  const loop = new THREE.Mesh(
-    new THREE.TorusGeometry(0.078, r, 5, 12, Math.PI),
-    mat
-  );
-  loop.rotation.z = Math.PI;
-  loop.position.set(0, -0.02, z);
-  helm.add(loop);
-}
-
-function addNums(torso: THREE.Group, def: PlayerDef): void {
-  const num = jerseyNum(def);
-  num.position.set(0, 0.27, 0.155);
-  const back = jerseyNum(def);
-  back.position.set(0, 0.27, -0.155);
-  back.rotation.y = Math.PI;
-  torso.add(num, back);
-}
-
-function addArm(
-  pelvis: THREE.Group,
-  x: number,
-  mats: TeamMats,
-  bulk: boolean
-): { arm: THREE.Group; fore: THREE.Group; hand: THREE.Group } {
-  const ur = bulk ? 0.072 : 0.055;
-  const fr = bulk ? 0.06 : 0.046;
-  const arm = new THREE.Group();
-  arm.position.set(x, ARM_Y, 0);
-  const deltoid = sphMesh(bulk ? 0.1 : 0.082, mats.jersey, 10);
-  deltoid.position.y = 0.015;
-  const upper = hang(ur, UPPER, mats.jersey);
-  const cuff = capMesh(ur * 1.06, 0.045, mats.stripe, 8);
-  cuff.position.y = -UPPER * 0.62;
-  const elbow = sphMesh(ur * 1.05, mats.skin, 8);
-  elbow.position.y = -UPPER;
-  const elbowPad = sphMesh(ur * 0.82, mats.dark, 8);
-  elbowPad.position.set(0, -UPPER, -ur * 0.62);
-  elbowPad.scale.set(1.08, 0.82, 0.5);
-  const fore = new THREE.Group();
-  fore.position.y = -UPPER;
-  const sleeve = hang(fr * 1.04, FORE * 0.42, mats.jersey);
-  const forearm = hang(fr, FORE, mats.skin);
-  const wrist = sphMesh(fr * 0.88, mats.skin, 7);
-  wrist.position.y = -FORE;
-  const inn = x < 0 ? 1 : -1;
-  const hand = addHand(mats, bulk, inn);
-  hand.position.y = -FORE;
-  fore.add(sleeve, forearm, wrist, hand);
-  arm.add(deltoid, upper, cuff, elbow, elbowPad, fore);
-  pelvis.add(arm);
-  return { arm, fore, hand };
-}
-
-function addHand(
-  mats: TeamMats,
-  bulk: boolean,
-  inn: number
-): THREE.Group {
-  const hand = new THREE.Group();
-  const g = mats.glove;
-  const palm = new THREE.Mesh(
-    new THREE.BoxGeometry(0.082, 0.096, 0.034),
-    g
-  );
-  palm.position.y = -0.05;
-  hand.add(palm);
-  const thumb = new THREE.Group();
-  thumb.position.set(0.04 * inn, -0.038, 0.018);
-  thumb.rotation.set(0.5, 0.18 * inn, 1.05 * inn);
-  thumb.add(hang(0.014, 0.052, g, 5));
-  hand.add(thumb);
-  const lens = [0.05, 0.058, 0.054, 0.042];
-  const xs = [-0.026, -0.009, 0.009, 0.026];
-  for (let i = 0; i < 4; i++) {
-    const f = new THREE.Group();
-    f.position.set(xs[i], -0.092, 0.008);
-    f.rotation.x = 0.28;
-    f.add(hang(0.013, lens[i], g, 5));
-    hand.add(f);
-  }
-  if (bulk) {
-    hand.scale.setScalar(1.12);
-  }
-  return hand;
-}
-
-function addLeg(
-  pelvis: THREE.Group,
-  x: number,
-  mats: TeamMats,
-  bulk: boolean
-): { thigh: THREE.Group; shin: THREE.Group; foot: THREE.Group } {
-  const tw = bulk ? 0.088 : 0.068;
-  const sw = bulk ? 0.07 : 0.054;
-  const thigh = new THREE.Group();
-  thigh.position.set(x, 0, 0);
-  const hip = sphMesh(tw * 1.15, mats.pants, 10);
-  const tMesh = hang(tw, THIGH, mats.pants);
-  const thighPad = sphMesh(tw * 0.92, mats.stripe, 10);
-  thighPad.position.set(0, -THIGH * 0.48, tw * 0.7);
-  thighPad.scale.set(0.9, 1.45, 0.38);
-  const knee = sphMesh(tw * 0.95, mats.pants, 8);
-  knee.position.y = -THIGH;
-  const kneePad = sphMesh(tw * 0.8, mats.dark, 8);
-  kneePad.position.set(0, -THIGH, tw * 0.66);
-  kneePad.scale.set(0.92, 1.04, 0.42);
-  const shin = new THREE.Group();
-  shin.position.y = -THIGH;
-  const sMesh = hang(sw, SHIN, mats.pants);
-  const sock = capMesh(sw * 1.04, 0.1, mats.stripe, 6);
-  sock.position.y = -SHIN * 0.62;
-  sock.scale.set(1, 0.38, 1);
-  const ankle = sphMesh(sw * 0.92, mats.dark, 7);
-  ankle.position.y = -SHIN;
-  const foot = addShoe(mats, bulk);
-  foot.position.y = -SHIN;
-  shin.add(sMesh, sock, ankle, foot);
-  thigh.add(hip, tMesh, thighPad, knee, kneePad, shin);
-  pelvis.add(thigh);
-  return { thigh, shin, foot };
-}
-
-function addShoe(mats: TeamMats, bulk: boolean): THREE.Group {
-  const foot = new THREE.Group();
-  const d = mats.dark;
-  const s = bulk ? 1.08 : 1;
-  const heel = sphMesh(0.044, d, 8);
-  heel.position.set(0, -0.055, -0.028);
-  heel.scale.set(1.15 * s, 0.82, 1.15);
-  const mid = capMesh(0.038 * s, 0.13, d, 6);
-  mid.rotation.x = Math.PI / 2;
-  mid.position.set(0, -0.062, 0.042);
-  mid.scale.set(1.18, 1, 0.68);
-  const toe = sphMesh(0.04 * s, d, 8);
-  toe.position.set(0, -0.058, 0.118);
-  toe.scale.set(1.2, 0.68, 1.28);
-  const collar = sphMesh(0.038 * s, d, 7);
-  collar.position.set(0, -0.028, 0.02);
-  collar.scale.set(1.12, 0.72, 1.25);
-  foot.add(heel, mid, toe, collar, shoeStuds(d, s));
-  return foot;
-}
-
-function shoeStuds(material: THREE.Material, scale: number): THREE.Group {
-  const studs = new THREE.Group();
-  const points: Array<[number, number]> = [
-    [-0.025, -0.02],
-    [0.025, -0.02],
-    [-0.025, 0.09],
-    [0.025, 0.09]
-  ];
-  for (const [x, z] of points) {
-    const stud = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.01, 0.014, 0.025, 6),
-      material
-    );
-    stud.position.set(x * scale, -0.092, z);
-    studs.add(stud);
-  }
-  return studs;
-}
-
-function jerseyNum(def: PlayerDef): THREE.Mesh {
-  const off = def.side === 'offense';
-  const fg = off ? '#e8c547' : '#0d2a4a';
-  const mat = new THREE.MeshBasicMaterial({
-    map: numberTexture(def.number, 'none', fg),
-    transparent: true,
-    alphaTest: 0.25,
-    side: THREE.DoubleSide
-  });
-  return new THREE.Mesh(new THREE.PlaneGeometry(0.32, 0.32), mat);
-}
-
-/** Tapered anatomical segment; joint meshes hide the open profile ends. */
-function hang(
-  r: number,
-  len: number,
-  mat: THREE.Material,
-  segs = 8
-): THREE.Mesh {
-  const profile = [
-    new THREE.Vector2(r * 0.72, len * 0.5),
-    new THREE.Vector2(r, len * 0.28),
-    new THREE.Vector2(r * 0.94, -len * 0.12),
-    new THREE.Vector2(r * 0.68, -len * 0.5)
-  ];
-  const mesh = new THREE.Mesh(
-    new THREE.LatheGeometry(profile, Math.max(segs, 10)),
-    mat
-  );
-  mesh.position.y = -len * 0.5;
-  return mesh;
-}
-
-function capMesh(
-  r: number,
-  len: number,
-  mat: THREE.Material,
-  segs = 8
-): THREE.Mesh {
-  const cyl = Math.max(0.02, len - 2 * r);
-  return new THREE.Mesh(
-    new THREE.CapsuleGeometry(r, cyl, 4, segs),
-    mat
-  );
-}
-
-function sphMesh(
-  r: number,
-  mat: THREE.Material,
-  segs = 10
-): THREE.Mesh {
-  return new THREE.Mesh(
-    new THREE.SphereGeometry(r, segs, segs - 2),
-    mat
-  );
-}
-
-function rod(
-  len: number,
-  r: number,
-  mat: THREE.Material
-): THREE.Mesh {
-  return new THREE.Mesh(
-    new THREE.CylinderGeometry(r, r, len, 6),
-    mat
-  );
 }
 
 function stampRefs(root: THREE.Group, rig: PlayerRig): void {
