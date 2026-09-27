@@ -21,15 +21,24 @@ const RING_COL: Record<CoverGrade, number> = {
   covered: 0xe35d5d
 };
 
-/** Human acceleration and turn rates keep cuts planted and readable. */
-const ACCEL = 15.5;
-const BRAKE = 23;
-const TURN = 5.4;
+/**
+ * Locomotion is force-limited, in yards and seconds. A player pushes
+ * hardest from a standstill and has less left near top speed; brakes
+ * harder than he accelerates; and can only bend his path as fast as
+ * his feet grip, so turns widen with speed. Sharp cuts come out as a
+ * plant (brake and turn together), not a scripted stop-then-pivot.
+ */
+const ACCEL = 12;
+const ACCEL_FADE = 0.7;
+const BRAKE = 16;
+const COAST = 10;
+const LATERAL = 18;
+const GRIP = 22;
+const TURN = 7;
 const PLANT_ANG = 1.08;
 const PLANT_T = 0.2;
 const PLANT_SPD = 2.1;
-const CUT_MIN = 0.27;
-const ARRIVE_R = 1.6;
+const ARRIVE_DECEL = 11;
 const ARRIVED = 0.26;
 const FLOW_HIT = 0.55;
 const MIN_SPD = 0.4;
@@ -53,6 +62,7 @@ export class PlayerActor {
   private plant = 0;
   private shiftZ = 0;
   private chasing = false;
+  private offRoute = false;
   private holdKind: AnimKind | null = null;
   private holdLeft = 0;
   private holdDur = 0.4;
@@ -104,6 +114,7 @@ export class PlayerActor {
     this.gait = 0;
     this.plant = 0;
     this.chasing = false;
+    this.offRoute = false;
     this.holdKind = null;
     this.holdLeft = 0;
     this.bodyLean = 0;
@@ -233,17 +244,19 @@ export class PlayerActor {
 
   /** QB retreating from the line faces upfield while he drops. */
   private isDropping(live: boolean, vz: number): boolean {
-    return this.def.pos === 'QB' && live && vz < -0.05;
+    return this.def.pos === 'QB' && live && !this.offRoute && vz < -0.05;
   }
 
   private follow(dt: number): void {
     const route = this.def.route;
-    if (!route || this.idx >= route.length) {
+    if (this.offRoute || !route || this.idx >= route.length) {
+      // Out of script: carry the momentum and slow down, never freeze.
+      this.coastStop(dt, COAST);
       return;
     }
     if (this.wait > 0) {
       this.wait -= dt;
-      this.coastStop(dt);
+      this.coastStop(dt, BRAKE);
       return;
     }
     const p = route[this.idx];
@@ -271,7 +284,7 @@ export class PlayerActor {
     const hit = stop ? ARRIVED : FLOW_HIT;
     if (dist < 1e-4) {
       if (stop) {
-        this.coastStop(dt);
+        this.coastStop(dt, BRAKE);
       }
       return true;
     }
@@ -279,6 +292,11 @@ export class PlayerActor {
     const cap = stop ? arriveCap(maxSpeed, dist) : maxSpeed;
     this.applyInertia(desired, dt, cap, maxSpeed);
     return dist < hit;
+  }
+
+  /** Stop following the playbook; update() then coasts to a stop. */
+  leaveRoute(): void {
+    this.offRoute = true;
   }
 
   /** Break off the playbook route and run to a spot. */
@@ -334,7 +352,7 @@ export class PlayerActor {
 
   /** Bleed momentum when a controlled runner releases the stick. */
   coast(dt: number): void {
-    this.coastStop(dt);
+    this.coastStop(dt, COAST);
     const speed = Math.hypot(this.vx, this.vz);
     if (!this.tickHold(dt) && speed > MIN_SPD) {
       this.pumpRun(dt, speed);
@@ -508,17 +526,17 @@ export class PlayerActor {
     return Math.hypot(n.x - p.x, n.z - p.z) < 0.4;
   }
 
-  /** Brake along current velocity; used on hitches. */
-  private coastStop(dt: number): void {
+  /** Brake along current velocity; used on hitches and coasting. */
+  private coastStop(dt: number, decel: number): void {
     this.plant = Math.max(0, this.plant - dt);
     this.bodyLean *= Math.max(0, 1 - dt * 7);
     const speed = Math.hypot(this.vx, this.vz);
-    if (speed < MIN_SPD) {
+    if (speed < 1e-3) {
       this.vx = 0;
       this.vz = 0;
       return;
     }
-    const next = Math.max(0, speed - BRAKE * dt);
+    const next = Math.max(0, speed - decel * dt);
     const k = next / speed;
     this.vx *= k;
     this.vz *= k;
@@ -535,8 +553,9 @@ export class PlayerActor {
   }
 
   /**
-   * Drive vx/vz along current heading. Plant (brake, then
-   * turn) on sharp cuts. Facing lags toward velocity.
+   * Push the velocity toward `desired` at `cap` within what the
+   * feet can deliver: drive/brake along the run, bend across it,
+   * all inside one grip budget. Facing lags toward velocity.
    */
   private applyInertia(
     desired: number,
@@ -545,34 +564,44 @@ export class PlayerActor {
     maxSpeed: number
   ): void {
     this.plant = Math.max(0, this.plant - dt);
-    let speed = Math.hypot(this.vx, this.vz);
-    let heading = speed > MIN_SPD
-      ? Math.atan2(this.vx, this.vz)
-      : desired;
-    const err = wrapPi(desired - heading);
-    const leanTarget = clampUnit(err / 1.25) * 0.34;
-    const leanRate = Math.min(1, dt * 7);
-    this.bodyLean += (leanTarget - this.bodyLean) * leanRate;
-    const plantCut =
-      Math.abs(err) > PLANT_ANG && speed > PLANT_SPD;
-    if (plantCut) {
-      this.plant = Math.max(this.plant, PLANT_T);
-      speed = Math.max(0, speed - BRAKE * dt);
-    } else {
-      heading = headingLerp(heading, desired, TURN * dt);
-      speed = accelSpeed(speed, cap, dt);
-      speed = cutSpeed(speed, heading, desired, maxSpeed);
+    const speed = Math.hypot(this.vx, this.vz);
+    const moving = speed > MIN_SPD;
+    // Frame of the run: along current velocity, or where he wants to go.
+    const heading = moving ? Math.atan2(this.vx, this.vz) : desired;
+    const fx = Math.sin(heading);
+    const fz = Math.cos(heading);
+    const target = Math.min(cap, maxSpeed);
+    const dvx = Math.sin(desired) * target - this.vx;
+    const dvz = Math.cos(desired) * target - this.vz;
+    let along = dvx * fx + dvz * fz;
+    let across = dvz * fx - dvx * fz;
+    const push = along > 0
+      ? driveAccel(speed, maxSpeed)
+      : BRAKE;
+    along = clampAbs(along, push * dt);
+    across = clampAbs(across, LATERAL * dt);
+    const total = Math.hypot(along, across);
+    if (total > GRIP * dt) {
+      along *= (GRIP * dt) / total;
+      across *= (GRIP * dt) / total;
     }
-    speed = Math.min(speed, maxSpeed);
-    this.vx = Math.sin(heading) * speed;
-    this.vz = Math.cos(heading) * speed;
+    this.vx += fx * along - fz * across;
+    this.vz += fz * along + fx * across;
+    const err = Math.abs(wrapPi(desired - heading));
+    if (moving && err > PLANT_ANG && speed > PLANT_SPD) {
+      this.plant = Math.max(this.plant, PLANT_T);
+    }
+    // Lean into the actual turning force, not the stick.
+    const leanTarget =
+      clampUnit(-across / Math.max(LATERAL * dt, 1e-4)) * 0.34;
+    this.bodyLean += (leanTarget - this.bodyLean) * Math.min(1, dt * 7);
     this.x += this.vx * dt;
     this.z += this.vz * dt;
-    this.facing = headingLerp(
-      this.facing,
-      heading,
-      TURN * dt
-    );
+    const nowSpeed = Math.hypot(this.vx, this.vz);
+    const look = nowSpeed > MIN_SPD
+      ? Math.atan2(this.vx, this.vz)
+      : desired;
+    this.facing = headingLerp(this.facing, look, TURN * dt);
   }
 }
 
@@ -650,34 +679,17 @@ function namePlate(def: PlayerDef): THREE.Sprite {
   return s;
 }
 
+/** Top speed you can still stop from within `dist`. */
 function arriveCap(maxSpeed: number, dist: number): number {
-  if (dist >= ARRIVE_R) {
-    return maxSpeed;
-  }
-  return maxSpeed * (dist / ARRIVE_R);
+  return Math.min(maxSpeed, Math.sqrt(2 * ARRIVE_DECEL * dist));
 }
 
-function accelSpeed(
-  speed: number,
-  cap: number,
-  dt: number
-): number {
-  if (speed < cap) {
-    return Math.min(cap, speed + ACCEL * dt);
-  }
-  return Math.max(cap, speed - BRAKE * dt);
+/** Strong first steps, fading as the player nears top speed. */
+function driveAccel(speed: number, maxSpeed: number): number {
+  const fraction = Math.min(1, speed / Math.max(maxSpeed, 0.1));
+  return ACCEL * (1 - ACCEL_FADE * fraction);
 }
 
-function cutSpeed(
-  speed: number,
-  heading: number,
-  desired: number,
-  maxSpeed: number
-): number {
-  const dot =
-    Math.sin(heading) * Math.sin(desired) +
-    Math.cos(heading) * Math.cos(desired);
-  // Cap, not a per-frame multiply — 60 Hz would freeze them.
-  const cut = Math.max(CUT_MIN, dot);
-  return Math.min(speed, maxSpeed * cut);
+function clampAbs(value: number, limit: number): number {
+  return Math.min(limit, Math.max(-limit, value));
 }

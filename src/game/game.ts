@@ -647,6 +647,7 @@ export class FootballGame {
         x: qb.x + this.stickX * 5,
         z: qb.z + this.stickZ * 5
       };
+      qb.leaveRoute();
       qb.chase(to, dt, 6.35);
       if (qb.z > this.drive.losZ + 1.35) {
         this.startQbRun();
