@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ballisticVel, Football } from './ball';
+import { ballisticVel, Football, PASS_FLIGHT_TIME_SCALE } from './ball';
 import { MaddenCamera } from './camera';
 import {
   CATCH_HEIGHT_MAX,
@@ -29,10 +29,24 @@ import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
 import { makeTeamMats } from './materials';
 import { clamp, lerp, xzDist } from './math';
-import { LinePlay } from './line-play';
+import { isPassRusher, LinePlay } from './line-play';
 import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
+import {
+  BALL_READ_DELAY,
+  chargePower,
+  contest,
+  makeShot,
+  overHold,
+  pressureFrom,
+  spreadFor,
+  TAP_POWER,
+  TIP_COOLDOWN,
+  type ThrowShot,
+  type ThrowSituation,
+  type ThrowTarget
+} from './throwing';
 import type { CoverGrade, Phase, Vec2 } from './types';
 
 const RECEIVER_YAC_TIME = 5.2;
@@ -126,6 +140,16 @@ export class FootballGame {
   private stickX = 0;
   private stickZ = 0;
   private readonly ghosts = new Map<string, THREE.Line>();
+  private charge: { target: ThrowTarget; t: number } | null = null;
+  private shot: ThrowShot | null = null;
+  private releaseSpot: Vec2 | null = null;
+  private throwT = 0;
+  private tipT = 0;
+  private tipped = false;
+  private closest: number | null = null;
+  private wrHandsOff = false;
+  private incompMsg = 'INCOMPLETE';
+  private turnoverText = '';
   private toast?: (msg: string, bad: boolean) => void;
   private overFn?: (over: 'win' | 'loss' | null) => void;
 
@@ -181,6 +205,7 @@ export class FootballGame {
     this.lastJuke = null;
     this.lastTacklerId = null;
     this.flightPeak = 0;
+    this.turnoverText = '';
     this.overFn?.(null);
     this.huddle();
   }
@@ -234,33 +259,100 @@ export class FootballGame {
     return this.phase === 'yac' && this.carrier === this.qb();
   }
 
-  /** Keyboard / list shortcut: throw near that receiver. */
+  /** HUD row click: instant touch pass to that receiver. */
   throwTo(id: string): void {
-    if (this.phase !== 'play') {
-      return;
-    }
-    if (this.qb().z > this.drive.losZ + 0.4) {
+    if (!this.canThrow()) {
       return;
     }
     const wr = this.byId.get(id);
     if (!wr?.def.eligible) {
       return;
     }
-    this.throwAt(this.leadReceiver(wr));
+    this.charge = null;
+    this.throwAt(this.leadReceiver(wr, TAP_POWER), TAP_POWER, 0);
   }
 
-  /** Click the grass: the QB throws to that spot. */
+  /** Instant touch pass to a grass spot. */
   throwAtScreen(cx: number, cy: number): void {
-    if (this.phase !== 'play') {
-      return;
-    }
-    if (this.qb().z > this.drive.losZ + 0.4) {
+    if (!this.canThrow()) {
       return;
     }
     const spot = this.groundAt(cx, cy);
     if (spot) {
-      this.throwAt(spot);
+      this.charge = null;
+      this.throwAt(spot, TAP_POWER, 0);
     }
+  }
+
+  /** Press on the grass: start winding up toward that spot. */
+  beginChargeAtScreen(cx: number, cy: number): void {
+    if (!this.canThrow() || this.charge) {
+      return;
+    }
+    const spot = this.groundAt(cx, cy);
+    if (spot) {
+      this.charge = { target: { kind: 'spot', spot }, t: 0 };
+    }
+  }
+
+  /** Hold a receiver key: wind up a pass led to him. */
+  beginChargeOn(id: string): void {
+    if (!this.canThrow() || this.charge) {
+      return;
+    }
+    if (!this.byId.get(id)?.def.eligible) {
+      return;
+    }
+    this.charge = { target: { kind: 'wr', id }, t: 0 };
+  }
+
+  /** Release: power comes from how long it was held. */
+  releaseCharge(): void {
+    const charge = this.charge;
+    this.charge = null;
+    if (!charge || !this.canThrow()) {
+      return;
+    }
+    const power = chargePower(charge.t);
+    const spot = this.chargeSpot(charge.target, power);
+    if (spot) {
+      this.throwAt(spot, power, overHold(charge.t));
+    }
+  }
+
+  cancelCharge(): void {
+    this.charge = null;
+  }
+
+  /** Receiver key released for a different receiver, etc. */
+  chargingOn(): string | null {
+    const target = this.charge?.target;
+    return target?.kind === 'wr' ? target.id : null;
+  }
+
+  /** Meter readout while the pass is wound up. */
+  chargeInfo(): {
+    power: number;
+    spread: number;
+    pressure: number;
+    over: boolean;
+  } | null {
+    const charge = this.charge;
+    if (!charge || this.phase !== 'play') {
+      return null;
+    }
+    const power = chargePower(charge.t);
+    const spot = this.chargeSpot(charge.target, power);
+    if (!spot) {
+      return null;
+    }
+    const s = this.situation(spot, power, overHold(charge.t));
+    return {
+      power,
+      spread: spreadFor(s),
+      pressure: s.pressure,
+      over: s.overHold > 0
+    };
   }
 
   previewAim(cx: number, cy: number): void {
@@ -271,6 +363,9 @@ export class FootballGame {
     if (!spot) {
       return;
     }
+    if (this.charge?.target.kind === 'spot') {
+      this.charge.target.spot = spot;
+    }
     this.aimMark.visible = true;
     this.aimMark.position.set(spot.x, 0.06, spot.z);
   }
@@ -280,6 +375,7 @@ export class FootballGame {
     if (live) {
       this.clock += dt;
     }
+    this.tickCharge(dt);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
     this.ball.update(dt);
@@ -291,7 +387,7 @@ export class FootballGame {
       this.checkSack();
     }
     if (this.phase === 'throw') {
-      this.checkPass();
+      this.checkPass(dt);
     }
     if (this.phase === 'yac') {
       this.tickYac(dt);
@@ -457,7 +553,7 @@ export class FootballGame {
           ? 'Drive over. RESET from the 10.'
           : '1–4 audible · M motion · SNAP · ZQSD scramble.';
       case 'play':
-        return 'Click grass to throw. ZQSD to scramble.';
+        return 'Hold on grass or 1–5, release to throw. Longer = harder.';
       case 'throw':
         return 'Ball in the air. Nearest WR breaks to it.';
       case 'yac':
@@ -467,7 +563,7 @@ export class FootballGame {
       case 'touchdown':
         return 'TOUCHDOWN. You marched 90 yards. RESET to go again.';
       case 'turnover':
-        return 'Turnover on downs. RESET to start on the 10.';
+        return `${this.turnoverText || 'Turnover on downs'}. RESET to start on the 10.`;
       default:
         return '';
     }
@@ -500,17 +596,102 @@ export class FootballGame {
     return Math.max(0, SACK_TIME - this.clock);
   }
 
-  private throwAt(spot: Vec2): void {
-    const from = handPos(this.qb());
-    const x = clamp(spot.x, -HALF_W + 0.7, HALF_W - 0.7);
-    const z = clamp(spot.z, this.drive.losZ - 1.5, 58);
-    const to = new THREE.Vector3(x, 1.68, z);
-    const time = flightTime(from, to);
-    const vel = ballisticVel(from, to, time);
-    this.aim = { x, z };
-    this.breaker = nearestEligible(this.aim, this.eligibles());
+  private canThrow(): boolean {
+    return this.phase === 'play' &&
+      this.qb().z <= this.drive.losZ + 0.4;
+  }
+
+  private tickCharge(dt: number): void {
+    if (!this.charge) {
+      return;
+    }
+    if (this.phase !== 'play') {
+      this.charge = null;
+      return;
+    }
+    this.charge.t += dt;
+    const power = chargePower(this.charge.t);
+    const spot = this.chargeSpot(this.charge.target, power);
+    if (!spot) {
+      return;
+    }
+    const s = this.situation(spot, power, overHold(this.charge.t));
+    const ring = Math.max(0.55, spreadFor(s) / 0.92);
     this.aimMark.visible = true;
-    this.aimMark.position.set(x, 0.06, z);
+    this.aimMark.position.set(spot.x, 0.06, spot.z);
+    this.aimMark.scale.setScalar(ring);
+    const mat = this.aimMark.material as THREE.MeshBasicMaterial;
+    mat.color.setHex(s.overHold > 0 ? 0xff6b5b : 0xe8c547);
+  }
+
+  private chargeSpot(target: ThrowTarget, power: number): Vec2 | null {
+    if (target.kind === 'spot') {
+      return target.spot;
+    }
+    const wr = this.byId.get(target.id);
+    return wr ? this.leadReceiver(wr, power) : null;
+  }
+
+  private situation(
+    target: Vec2,
+    power: number,
+    over: number
+  ): ThrowSituation {
+    const qb = this.qb();
+    return {
+      from: { x: qb.x, z: qb.z },
+      target,
+      power,
+      pressure: this.pressure(),
+      moving: clamp(Math.hypot(this.stickX, this.stickZ), 0, 1),
+      overHold: over
+    };
+  }
+
+  /** How close the nearest rusher is to the QB (0..1). */
+  private pressure(): number {
+    const qb = this.qb();
+    let near = 99;
+    for (const p of this.players) {
+      if (p.def.side !== 'defense') {
+        continue;
+      }
+      if (p.def.pos !== 'DL' && !isPassRusher(p.def.id)) {
+        continue;
+      }
+      near = Math.min(near, xzDist(qb, p));
+    }
+    return pressureFrom(near);
+  }
+
+  private throwAt(spot: Vec2, power: number, over: number): void {
+    const from = handPos(this.qb());
+    const shot = makeShot(this.situation(spot, power, over));
+    const x = clamp(shot.landing.x, -HALF_W - 3, HALF_W + 3);
+    const z = clamp(shot.landing.z, this.drive.losZ - 1.5, 62);
+    shot.landing = { x, z };
+    const to = new THREE.Vector3(x, 1.68, z);
+    const time = flightTime(from, to) * shot.timeScale;
+    const vel = ballisticVel(from, to, time);
+    this.shot = shot;
+    this.releaseSpot = { x: from.x, z: from.z };
+    this.throwT = 0;
+    this.tipT = 0;
+    this.tipped = false;
+    this.closest = null;
+    this.wrHandsOff = false;
+    this.incompMsg = 'INCOMPLETE';
+    this.aim = { x, z };
+    this.breaker = nearestEligible(shot.intended, this.eligibles());
+    this.aimMark.visible = true;
+    this.aimMark.scale.setScalar(1);
+    (this.aimMark.material as THREE.MeshBasicMaterial).color
+      .setHex(0xe8c547);
+    this.aimMark.position.set(
+      shot.intended.x,
+      0.06,
+      shot.intended.z
+    );
     this.ball.launch(this.scene, from, vel);
     this.flightPeak = from.y;
     this.qb().lockAnim('throw', 0.46);
@@ -518,12 +699,13 @@ export class FootballGame {
     this.madden.setPhase('throw');
   }
 
-  private leadReceiver(wr: PlayerActor): Vec2 {
+  private leadReceiver(wr: PlayerActor, power: number): Vec2 {
     const from = handPos(this.qb());
+    const scale = (1.4 - power * 0.8) * PASS_FLIGHT_TIME_SCALE * 0.85;
     let lead = wr.predict(0.68);
-    for (let i = 0; i < 2; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       const to = new THREE.Vector3(lead.x, 1.68, lead.z);
-      lead = wr.predict(flightTime(from, to) * 0.9);
+      lead = wr.predict(flightTime(from, to) * scale);
     }
     return lead;
   }
@@ -557,7 +739,10 @@ export class FootballGame {
       }
       if (this.phase === 'throw' && p.def.eligible && aim) {
         if (this.shouldBreak(p)) {
-          p.chase(aim, dt, 7.65);
+          // Break on the called spot, then track the real ball.
+          const read = this.throwT >= BALL_READ_DELAY;
+          const to = read || !this.shot ? aim : this.shot.intended;
+          p.chase(to, dt, read ? 6.7 : 7.65);
           continue;
         }
       }
@@ -814,6 +999,15 @@ export class FootballGame {
     this.breaker = null;
     this.aim = null;
     this.aimMark.visible = false;
+    this.aimMark.scale.setScalar(1);
+    this.charge = null;
+    this.shot = null;
+    this.releaseSpot = null;
+    this.throwT = 0;
+    this.tipT = 0;
+    this.tipped = false;
+    this.wrHandsOff = false;
+    this.incompMsg = 'INCOMPLETE';
     this.motionOn = false;
     this.motionIdx = 0;
     this.look = Math.random() < 0.5 ? COVER3 : COVER2;
@@ -910,34 +1104,94 @@ export class FootballGame {
     }
   }
 
-  private checkPass(): void {
+  private checkPass(dt: number): void {
     const b = this.ball;
+    this.throwT += dt;
     if (Math.abs(b.pos.x) > HALF_W + 0.2) {
       this.deadIncomp('OUT OF BOUNDS');
       return;
     }
     if (!b.inAir) {
-      this.deadIncomp('INCOMPLETE');
+      this.deadIncomp(this.incompMsg);
+      return;
+    }
+    if (this.tipT > 0) {
+      this.tipT -= dt;
+      return;
+    }
+    if (b.pos.y < CATCH_HEIGHT_MIN || b.pos.y > CATCH_HEIGHT_MAX) {
       return;
     }
     const wr = this.catchWindow();
-    if (!wr) {
+    const db = this.ballHawk();
+    const toWr = wr ? xzDist(wr, b.pos) : null;
+    const toDb = db ? xzDist(db, b.pos) : null;
+    if (!this.atClosest(toWr, toDb)) {
       return;
     }
-    this.resolveCatch(wr);
+    const outcome = contest({
+      ballSpeed: b.vel.length(),
+      wrDist: toWr,
+      dbDist: toDb,
+      sep: wr && db ? xzDist(wr, db) : 99,
+      power: this.shot?.power ?? TAP_POWER,
+      tipped: this.tipped
+    });
+    if (!outcome) {
+      return;
+    }
+    if (outcome === 'pick' && db) {
+      this.intercept(db);
+      return;
+    }
+    if (outcome === 'breakup') {
+      this.tipBall(3.4, 'BROKEN UP');
+      db?.lockAnim('catch', 0.3);
+      return;
+    }
+    if (outcome === 'drop') {
+      this.wrHandsOff = true;
+      this.tipBall(1.8, 'DROPPED');
+      wr?.lockAnim('stumble', 0.5);
+      return;
+    }
+    if (wr) {
+      this.resolveCatch(wr);
+    }
+  }
+
+  /**
+   * Resolve at the moment of contact, not at the edge of the
+   * catch radius: wait until the ball is in the hands, or has
+   * stopped getting closer, or is about to hit the grass.
+   */
+  private atClosest(toWr: number | null, toDb: number | null): boolean {
+    const near = Math.min(toWr ?? 99, toDb ?? 99);
+    if (near > CATCH_RADIUS) {
+      this.closest = null;
+      return false;
+    }
+    const b = this.ball;
+    const landing = b.vel.y < 0 && b.pos.y < CATCH_HEIGHT_MIN + 0.3;
+    const passing = this.closest !== null && near > this.closest + 0.01;
+    this.closest = near;
+    return near <= 0.8 || passing || landing;
   }
 
   private catchWindow(): PlayerActor | null {
     const b = this.ball;
-    if (b.pos.y < CATCH_HEIGHT_MIN || b.pos.y > CATCH_HEIGHT_MAX) {
+    if (this.wrHandsOff) {
       return null;
     }
-    if (this.aim && xzDist(b.pos, this.aim) > 3.4) {
+    if (!this.tipped && this.aim && xzDist(b.pos, this.aim) > 3.4) {
       return null;
     }
     let best: PlayerActor | null = null;
     let dist = CATCH_RADIUS;
     for (const p of this.eligibles()) {
+      if (p === this.qb()) {
+        continue;
+      }
       const n = xzDist(p, b.pos);
       if (n <= dist) {
         dist = n;
@@ -947,22 +1201,53 @@ export class FootballGame {
     return best;
   }
 
-  private resolveCatch(wr: PlayerActor): void {
+  /** Coverage defender at the ball (can undercut anywhere). */
+  private ballHawk(): PlayerActor | null {
+    const b = this.ball;
+    const from = this.releaseSpot;
+    if (from && xzDist(b.pos, from) < 3) {
+      return null;
+    }
     const cover = this.players.filter((p) =>
-      isCoverage(p.def.pos)
+      isCoverage(p.def.pos) && !isPassRusher(p.def.id)
     );
-    const db = closestDefender(this.ball.pos, cover);
-    const toDb = db ? xzDist(this.ball.pos, db) : 99;
-    const toWr = xzDist(this.ball.pos, wr);
-    const sep = db ? xzDist(wr, db) : 99;
-    if (toDb + 0.7 < toWr && toDb < 0.8) {
-      this.deadIncomp('PICK');
-      return;
+    const db = closestDefender(b.pos, cover);
+    if (!db || xzDist(db, b.pos) > 1.35) {
+      return null;
     }
-    if (sep < 0.92) {
-      this.deadIncomp('BROKEN UP');
-      return;
-    }
+    return db;
+  }
+
+  /** Ball pops off hands: it stays live but wild. */
+  private tipBall(up: number, msg: string): void {
+    const v = this.ball.vel;
+    v.x = v.x * -0.2 + (Math.random() - 0.5) * 3;
+    v.z = v.z * 0.15 + (Math.random() - 0.5) * 3;
+    v.y = up + Math.random() * 1.2;
+    this.tipped = true;
+    this.closest = null;
+    this.tipT = TIP_COOLDOWN;
+    this.incompMsg = msg;
+    this.aim = { x: this.ball.pos.x, z: this.ball.pos.z };
+    this.aimMark.visible = false;
+    this.toast?.(msg, true);
+  }
+
+  private intercept(db: PlayerActor): void {
+    db.lockAnim('catch', 0.5);
+    this.ball.inAir = false;
+    this.ball.hold(db.rig.rightHand);
+    this.aimMark.visible = false;
+    this.drive.turnover();
+    this.turnoverText = 'Intercepted';
+    this.finishDrive(
+      `INTERCEPTED · #${db.def.number}`,
+      true,
+      'turnover'
+    );
+  }
+
+  private resolveCatch(wr: PlayerActor): void {
     this.prepareYac(wr);
     wr.lockAnim('catch', 0.32);
     this.ball.inAir = false;
@@ -977,6 +1262,7 @@ export class FootballGame {
     const r = this.drive.incomplete();
     if (r === 'turnover') {
       this.drive.turnover();
+      this.turnoverText = 'Turnover on downs';
       this.finishDrive('TURNOVER ON DOWNS', true, 'turnover');
       return;
     }

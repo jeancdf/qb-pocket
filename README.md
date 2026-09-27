@@ -17,7 +17,12 @@ bottom, downfield at the top). Scroll to zoom.
 ## Controls
 
 - **SNAP** or Space — hike the ball
-- Click a receiver, HUD row, or keys **1–5** — throw
+- Hold the mouse on the grass (or hold keys **1–5** on a receiver),
+  release to throw. A short hold floats a lob; a long hold ropes a
+  bullet. Hold too long and the ball sails. **Esc** cancels.
+- HUD row click — quick touch pass
+- Accuracy drops under pressure and on the move. Balls can be
+  dropped, broken up, tipped, and intercepted.
 - **RESET** or R — same play again
 
 Green ring = open. Yellow = window. Red = covered. Hold the

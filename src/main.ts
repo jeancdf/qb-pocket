@@ -1,6 +1,7 @@
 import './style.css';
 import { FootballGame } from './game/game';
 import { Hud } from './game/hud';
+import { ThrowMeter } from './game/throw-meter';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
 if (!canvas) {
@@ -10,6 +11,7 @@ if (!canvas) {
 const game = new FootballGame(canvas);
 window.__qb = game;
 const hud = new Hud();
+const meter = new ThrowMeter();
 game.onToast((msg, bad) => hud.toast(msg, bad));
 game.onOver((over) => hud.setResult(over));
 const ro = new ResizeObserver(() => game.resize());
@@ -49,22 +51,18 @@ canvas.addEventListener('pointermove', (ev) => {
   game.previewAim(ev.clientX, ev.clientY);
 });
 
+// Press on the grass to wind up, drag to aim, release to throw.
+// The longer the hold, the harder (and flatter) the pass.
 canvas.addEventListener('pointerdown', (ev) => {
   if (ev.button !== 0) {
     return;
   }
-  const startX = ev.clientX;
-  const startY = ev.clientY;
-  const onUp = (up: PointerEvent) => {
-    canvas.removeEventListener('pointerup', onUp);
-    const dx = up.clientX - startX;
-    const dy = up.clientY - startY;
-    if (Math.hypot(dx, dy) > 8) {
-      return;
-    }
-    game.throwAtScreen(up.clientX, up.clientY);
+  game.beginChargeAtScreen(ev.clientX, ev.clientY);
+  const onUp = () => {
+    window.removeEventListener('pointerup', onUp);
+    game.releaseCharge();
   };
-  canvas.addEventListener('pointerup', onUp);
+  window.addEventListener('pointerup', onUp);
 });
 
 const down = new Set<string>();
@@ -90,9 +88,12 @@ window.addEventListener('keydown', (ev) => {
   if (ev.key >= '1' && ev.key <= '5' && game.phase === 'play') {
     const rows = game.hudRows();
     const row = rows[Number(ev.key) - 1];
-    if (row) {
-      game.throwTo(row.id);
+    if (row && !ev.repeat) {
+      game.beginChargeOn(row.id);
     }
+  }
+  if (ev.key === 'Escape') {
+    game.cancelCharge();
   }
   if (game.phase === 'yac' && !game.controlsQbRun() &&
       ['KeyA', 'KeyQ', 'KeyD'].includes(ev.code)) {
@@ -109,6 +110,12 @@ window.addEventListener('keydown', (ev) => {
 });
 
 window.addEventListener('keyup', (ev) => {
+  if (ev.key >= '1' && ev.key <= '5') {
+    const row = game.hudRows()[Number(ev.key) - 1];
+    if (row && game.chargingOn() === row.id) {
+      game.releaseCharge();
+    }
+  }
   down.delete(ev.code);
   syncStick();
 });
@@ -143,6 +150,12 @@ function frame(now: number): void {
   last = now;
   game.update(dt);
   game.render();
+  const charge = game.chargeInfo();
+  if (charge) {
+    meter.show(charge.power, charge.spread, charge.pressure, charge.over);
+  } else {
+    meter.hide();
+  }
   hudTick += dt;
   if (hudTick > 0.12) {
     hudTick = 0;
