@@ -70,9 +70,16 @@ const down = new Set<string>();
 window.addEventListener('keydown', (ev) => {
   if (ev.code === 'Space') {
     ev.preventDefault();
+    if (game.phase === 'yac') {
+      game.juke();
+      return;
+    }
     hud.hidePlaybook();
     game.snap();
     paintHud();
+  }
+  if (ev.key === 'Shift') {
+    game.setSprint(true);
   }
   if (ev.key === 'h' || ev.key === 'H') {
     hud.togglePlaybook();
@@ -96,11 +103,6 @@ window.addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') {
     game.cancelCharge();
   }
-  if (game.phase === 'yac' && !game.controlsQbRun() &&
-      ['KeyA', 'KeyQ', 'KeyD'].includes(ev.code)) {
-    game.requestJuke(ev.code === 'KeyD' ? 1 : -1);
-    return;
-  }
   if (ev.key === 'r' || ev.key === 'R') {
     hud.hidePlaybook();
     game.reset();
@@ -111,6 +113,9 @@ window.addEventListener('keydown', (ev) => {
 });
 
 window.addEventListener('keyup', (ev) => {
+  if (ev.key === 'Shift') {
+    game.setSprint(false);
+  }
   if (ev.key >= '1' && ev.key <= '5') {
     const row = game.hudRows()[Number(ev.key) - 1];
     if (row && game.chargingOn() === row.id) {

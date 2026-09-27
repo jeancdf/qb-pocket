@@ -5,13 +5,18 @@
  */
 
 import { GOAL_Z, HALF_W, TACKLE_RANGE, YAC_SPEED } from './constants';
-import { isCoverage } from './coverage-play';
 import { clamp, xzDist } from './math';
 import type { PlayerActor } from './players';
 import type { Vec2 } from './types';
 
-const RECEIVER_YAC_TIME = 5.2;
 const QB_RUN_SPEED = 6.6;
+/** Shift: top-speed boost while the burst lasts. */
+const SPRINT_BOOST = 1.18;
+/** Seconds of full sprint, and refill per second when walking it off. */
+const SPRINT_TANK = 2.4;
+const SPRINT_REFILL = 0.5;
+/** Pause between two jukes. */
+const JUKE_COOLDOWN = 0.9;
 const TACKLE_SETTLE_TIME = 1.65;
 const JUKE_CHANCE = 0.54;
 const JUKE_RANGE = 3.15;
@@ -42,6 +47,9 @@ export class YacRun {
   private jukeT = 0;
   private tackleT = 0;
   private frontMissT = 0;
+  private jukeCool = 0;
+  /** Sprint fuel in seconds. */
+  sprintLeft = SPRINT_TANK;
 
   constructor(
     private readonly players: PlayerActor[],
@@ -60,6 +68,8 @@ export class YacRun {
     this.jukeT = 0;
     this.tackleT = 0;
     this.frontMissT = 0;
+    this.jukeCool = 0;
+    this.sprintLeft = SPRINT_TANK;
   }
 
   /** New drive: also forget the last juke and tackler. */
@@ -68,41 +78,54 @@ export class YacRun {
     this.lastTacklerId = null;
   }
 
-  /** Receiver caught it: square up to the nearest defender. */
+  /** Someone has the ball in the open field: the player steers. */
   start(carrier: PlayerActor): void {
     this.clear();
     this.carrier = carrier;
-    this.front = this.pickFrontDefender(carrier);
-    this.state = this.front ? 'approach' : 'none';
     this.lastJuke = null;
   }
 
-  /** QB crossed the line: the player steers, no scripted juke. */
+  /** QB crossed the line: same controls as a receiver. */
   startScramble(qb: PlayerActor): void {
     this.start(qb);
-    this.front = null;
-    this.state = 'none';
   }
 
   isDown(): boolean {
     return this.carrier?.isDown() ?? false;
   }
 
-  /** Let the player call a left or right cut. */
+  /**
+   * Space: cut on the nearest defender. `direction` is the world
+   * side (+x / -x); 0 means cut away from him.
+   */
   requestJuke(direction: number): void {
-    if (this.state !== 'approach') {
+    const wr = this.carrier;
+    if (!wr || wr.isDown() || this.jukeCool > 0) {
       return;
     }
-    this.requested = direction < 0 ? -1 : 1;
-    const front = this.front;
-    if (front && this.carrier && this.yacT >= 0.32 &&
-        xzDist(front, this.carrier) < JUKE_RANGE + 1.2) {
-      this.beginJuke(this.carrier);
+    if (this.state === 'cut' || this.state === 'down') {
+      return;
     }
+    const front = this.nearestDefender(wr);
+    if (!front || xzDist(front, wr) > JUKE_RANGE + 1.5) {
+      return;
+    }
+    this.front = front;
+    this.state = 'approach';
+    this.requested = direction === 0 ? 0 : direction < 0 ? -1 : 1;
+    this.beginJuke(wr);
   }
 
-  /** Move the carrier; `stick` steers him when he is the QB. */
-  move(dt: number, qb: PlayerActor, stick: Vec2): void {
+  /**
+   * Move the carrier with the stick, receiver or QB. No input:
+   * a receiver keeps running upfield, the QB coasts to a stop.
+   */
+  move(
+    dt: number,
+    qb: PlayerActor,
+    stick: Vec2,
+    sprint: boolean
+  ): void {
     const wr = this.carrier;
     if (!wr) {
       return;
@@ -111,15 +134,43 @@ export class YacRun {
       wr.updateRagdoll(dt);
       return;
     }
-    if (wr === qb) {
-      moveQb(qb, dt, stick);
-      return;
-    }
+    const top = this.carrierSpeed(wr === qb) *
+      this.sprintFactor(dt, sprint);
     if (this.state === 'cut' && this.jukeTarget) {
-      wr.chase(this.jukeTarget, dt, this.carrierSpeed(wr));
+      wr.chase(this.jukeTarget, dt, top);
       return;
     }
-    wr.advance(dt, this.carrierSpeed(wr));
+    const length = Math.hypot(stick.x, stick.z);
+    if (length < 0.2) {
+      if (wr === qb) {
+        qb.coast(dt);
+      } else {
+        wr.advance(dt, top);
+      }
+      return;
+    }
+    const target = {
+      x: wr.x + (stick.x / Math.max(1, length)) * 5,
+      z: wr.z + (stick.z / Math.max(1, length)) * 5
+    };
+    wr.chase(target, dt, top);
+  }
+
+  /** Spend the tank while Shift is held; refill slowly otherwise. */
+  private sprintFactor(dt: number, sprint: boolean): number {
+    if (sprint && this.sprintLeft > 0) {
+      this.sprintLeft = Math.max(0, this.sprintLeft - dt);
+      return SPRINT_BOOST;
+    }
+    this.sprintLeft = Math.min(
+      SPRINT_TANK,
+      this.sprintLeft + dt * SPRINT_REFILL
+    );
+    return 1;
+  }
+
+  sprinting(): boolean {
+    return this.sprintLeft > 0;
   }
 
   poseTackler(): void {
@@ -135,19 +186,20 @@ export class YacRun {
   }
 
   /** Returns true when the run is over (tackle, sideline, goal). */
-  tick(dt: number, qb: PlayerActor): boolean {
+  tick(dt: number): boolean {
     const wr = this.carrier;
     if (!wr) {
       return false;
     }
     this.yacT += dt;
     this.jukeT += dt;
+    this.jukeCool = Math.max(0, this.jukeCool - dt);
     this.frontMissT = Math.max(0, this.frontMissT - dt);
     if (wr.isDown()) {
       this.tackleT += dt;
       return this.tackleT >= TACKLE_SETTLE_TIME;
     }
-    this.updateJuke(wr);
+    this.updateJuke();
     wr.x = clamp(wr.x, -HALF_W + 0.35, HALF_W - 0.35);
     if (wr.z >= GOAL_Z) {
       return true;
@@ -160,13 +212,13 @@ export class YacRun {
       this.startTackle(wr, tackler);
       return false;
     }
-    return wr !== qb && this.yacT >= RECEIVER_YAC_TIME;
+    return false;
   }
 
   status(): string {
     switch (this.state) {
       case 'approach':
-        return 'Defender ahead slows YAC. A/Q or D calls the cut.';
+        return 'ZQSD to steer, Shift to sprint, Space to juke.';
       case 'cut':
         return 'Juke in progress — the outcome is not guaranteed.';
       case 'escaped':
@@ -176,47 +228,33 @@ export class YacRun {
       case 'down':
         return 'Tackled. The carrier is physically going to ground.';
       default:
-        return 'Catch. Turn upfield before pursuit closes.';
+        return 'ZQSD to steer, Shift to sprint, Space to juke.';
     }
   }
 
-  private carrierSpeed(wr: PlayerActor): number {
+  private carrierSpeed(isQb: boolean): number {
+    const base = isQb ? QB_RUN_SPEED : YAC_SPEED;
     if (this.state === 'cut') {
       return this.lastJuke === 'won' ? 5.85 : 4.35;
     }
-    if (this.state === 'stuffed') {
-      return this.jukeT < 0.9 ? 4.65 : 6.35;
+    if (this.state === 'stuffed' && this.jukeT < 0.9) {
+      return 4.65;
     }
     if (this.state === 'escaped' && this.jukeT < 0.45) {
-      return 6.25;
+      return Math.max(base, 6.25);
     }
-    const front = this.front;
-    if (this.state !== 'approach' || !front) {
-      return YAC_SPEED;
-    }
-    const distance = xzDist(wr, front);
-    const factor = clamp(0.62 + distance * 0.065, 0.68, 1);
-    return YAC_SPEED * factor;
+    return base;
   }
 
-  private updateJuke(wr: PlayerActor): void {
+  private updateJuke(): void {
     const front = this.front;
-    if (this.state === 'approach' && !front) {
-      this.state = 'none';
-      return;
-    }
-    if (this.state === 'approach' && front &&
-        this.yacT >= 0.38 &&
-        xzDist(wr, front) <= JUKE_RANGE) {
-      this.beginJuke(wr);
-      return;
-    }
     if (this.state !== 'cut' || this.jukeT < JUKE_TIME) {
       return;
     }
     const won = this.lastJuke === 'won';
     this.state = won ? 'escaped' : 'stuffed';
     this.jukeT = 0;
+    this.jukeCool = JUKE_COOLDOWN;
     this.frontMissT = won ? 1.05 : 0.3;
     if (won) {
       front?.lockAnim('stumble', 0.78);
@@ -272,8 +310,7 @@ export class YacRun {
   }
 
   private findTackler(wr: PlayerActor): PlayerActor | null {
-    const catchBalance = this.state === 'approach' &&
-      this.yacT < 0.38;
+    const catchBalance = this.yacT < 0.38;
     if (this.state === 'cut' || catchBalance) {
       return null;
     }
@@ -293,16 +330,16 @@ export class YacRun {
     return tackler;
   }
 
-  private pickFrontDefender(carrier: PlayerActor): PlayerActor | null {
+  private nearestDefender(carrier: PlayerActor): PlayerActor | null {
     let best: PlayerActor | null = null;
     let score = 99;
     for (const defender of this.players) {
-      if (!isCoverage(defender.def.pos)) {
+      if (defender.def.side !== 'defense' || defender.isDown()) {
         continue;
       }
-      const angleCost = Math.abs(defender.x - carrier.x) * 0.18;
+      // Prefer the man in front of the runner.
       const behind = Math.max(0, carrier.z - defender.z) * 0.45;
-      const next = xzDist(carrier, defender) + angleCost + behind;
+      const next = xzDist(carrier, defender) + behind;
       if (next < score) {
         best = defender;
         score = next;
@@ -310,19 +347,4 @@ export class YacRun {
     }
     return best;
   }
-}
-
-function moveQb(qb: PlayerActor, dt: number, stick: Vec2): void {
-  const length = Math.hypot(stick.x, stick.z);
-  if (length < 0.2) {
-    qb.coast(dt);
-    return;
-  }
-  const x = stick.x / Math.max(1, length);
-  const z = stick.z / Math.max(1, length);
-  const target = {
-    x: qb.x + x * 5,
-    z: qb.z + z * 5
-  };
-  qb.chase(target, dt, QB_RUN_SPEED);
 }

@@ -111,6 +111,7 @@ export class FootballGame {
   private motionOn = false;
   private motionIdx = 0;
   private stickX = 0;
+  private sprint = false;
   private stickZ = 0;
   private charge: { target: ThrowTarget; t: number } | null = null;
   private turnoverText = '';
@@ -211,10 +212,15 @@ export class FootballGame {
     this.stickZ = z;
   }
 
-  /** Let the player call a left or right cut during YAC. */
-  requestJuke(direction: number): void {
+  /** Shift held: the player-controlled runner sprints. */
+  setSprint(on: boolean): void {
+    this.sprint = on;
+  }
+
+  /** Space with the ball in the open field: juke toward the stick. */
+  juke(): void {
     if (this.phase === 'yac') {
-      this.yac.requestJuke(direction);
+      this.yac.requestJuke(Math.sign(this.stickX));
     }
   }
 
@@ -359,7 +365,7 @@ export class FootballGame {
     if (this.phase === 'throw') {
       this.checkPass(dt);
     }
-    if (this.phase === 'yac' && this.yac.tick(dt, this.qb())) {
+    if (this.phase === 'yac' && this.yac.tick(dt)) {
       this.endYac();
     }
     if (this.phase === 'presnap' && this.motionOn) {
@@ -519,9 +525,6 @@ export class FootballGame {
   }
 
   private yacStatus(): string {
-    if (this.controlsQbRun()) {
-      return 'ZQSD/WASD controls the QB all the way to the goal line.';
-    }
     return this.yac.status();
   }
 
@@ -652,7 +655,7 @@ export class FootballGame {
         z: qb.z + this.stickZ * 5
       };
       qb.leaveRoute();
-      qb.chase(to, dt, 6.35);
+      qb.chase(to, dt, this.sprint ? 7.1 : 6.35);
       if (qb.z > this.drive.losZ + 1.35) {
         this.startQbRun();
       }
@@ -661,7 +664,12 @@ export class FootballGame {
       const line = p.def.pos === 'OL' || p.def.pos === 'DL';
       const db = isCoverage(p.def.pos);
       if (this.phase === 'yac' && carrier === p) {
-        this.yac.move(dt, qb, { x: this.stickX, z: this.stickZ });
+        this.yac.move(
+          dt,
+          qb,
+          { x: this.stickX, z: this.stickZ },
+          this.sprint
+        );
         continue;
       }
       if (this.phase === 'yac' && this.yac.tackler === p) {
