@@ -97,7 +97,8 @@ export function buildRig(
   const ax = bulk ? 0.34 : 0.3;
   const hx = bulk ? 0.12 : 0.1;
   const arm = (x: number) => {
-    const g = joint(pelvis, x, ARM_Y);
+    // Shoulders ride on the torso so a leaning body keeps its arms.
+    const g = joint(torso, x, ARM_Y - torso.position.y);
     const fore = joint(g, 0, -UPPER);
     const hand = joint(fore, 0, -FORE);
     dressArm(g, fore, hand, mats, bulk, limbs, x < 0 ? 1 : -1);
@@ -234,8 +235,11 @@ function setPose(rig: PlayerRig, pose: Pose): void {
   const rLeg = pose.pelvis[0] - pose.rThigh[0] + pose.rShin;
   rig.leftFoot.rotation.set(pose.lFoot - lLeg, 0, 0);
   rig.rightFoot.rotation.set(pose.rFoot - rLeg, 0, 0);
-  rig.leftArm.rotation.set(...pose.lArm);
-  rig.rightArm.rotation.set(...pose.rArm);
+  // Pose arm pitch is measured from the pelvis; the shoulder joint now
+  // sits on the torso, so take the torso's own pitch back out.
+  const tp = pose.torso[0];
+  rig.leftArm.rotation.set(pose.lArm[0] - tp, pose.lArm[1], pose.lArm[2]);
+  rig.rightArm.rotation.set(pose.rArm[0] - tp, pose.rArm[1], pose.rArm[2]);
   // Negative X folds the elbow forward (anatomical bend).
   rig.leftFore.rotation.set(-pose.lFore, 0, 0);
   rig.rightFore.rotation.set(-pose.rFore, 0, 0);
