@@ -118,7 +118,7 @@ export class FootballGame {
   private overFn?: (over: 'win' | 'loss' | null) => void;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 400);
+    this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
     this.renderer = makeRenderer(canvas);
     this.madden = new MaddenCamera(this.camera, canvas);
     this.madden.attach();

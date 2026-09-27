@@ -8,11 +8,15 @@ export type CamPhase = 'presnap' | 'play' | 'throw' | 'dead';
 // The camera never yaws: it slides on x with the QB and
 // always looks straight up the field. Don't add a side
 // offset here, it turns the whole view diagonal.
-const FOV = 55;
-const HEIGHT = 6.4;
-const BACK = 11.5;
-const LOOK_AHEAD = 9;
-const LOOK_Y = 1.2;
+// Framing: the look point is LOOK_AHEAD past the QB and the
+// camera BACK behind that point, so it sits ~10 m behind the QB,
+// ~4.5 m off the grass, with a shallow pitch that shows the
+// whole QB low in frame and the field far downfield.
+const FOV = 60;
+const HEIGHT = 3.5;
+const BACK = 22;
+const LOOK_AHEAD = 12;
+const LOOK_Y = 1;
 const THROW_AHEAD = 3;
 const PUNCH_ZOOM = 1.32;
 const PUNCH_RATE = 5.5;
