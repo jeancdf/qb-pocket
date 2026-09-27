@@ -67,6 +67,8 @@ export class PlayerActor {
   private holdLeft = 0;
   private holdDur = 0.4;
   private bodyLean = 0;
+  private runAccel = 0;
+  private cutLean = 0;
   private dropping = false;
   private dropPeak = 0;
   private ragdollT = -1;
@@ -118,6 +120,8 @@ export class PlayerActor {
     this.holdKind = null;
     this.holdLeft = 0;
     this.bodyLean = 0;
+    this.runAccel = 0;
+    this.cutLean = 0;
     this.dropping = false;
     this.dropPeak = 0;
     this.ragdollT = -1;
@@ -472,10 +476,7 @@ export class PlayerActor {
     }
     const kind = autoKind(pos, live, speed);
     if (kind === 'run') {
-      const stride = this.plant > 0 ? 0.4 : 1;
-      const rate = this.plant > 0 ? 0.45 : 1;
-      this.gait += dt * speed * 3.2 * rate;
-      applyRun(this.rig, this.gait, stride, this.bodyLean);
+      this.stepRun(dt, speed);
       return;
     }
     this.gait += dt * Math.max(speed, 1);
@@ -545,6 +546,8 @@ export class PlayerActor {
     this.plant = Math.max(0, this.plant - dt);
     this.bodyLean *= Math.max(0, 1 - dt * 7);
     const speed = Math.hypot(this.vx, this.vz);
+    const braking = speed > 1e-3 ? -decel : 0;
+    this.runAccel += (braking - this.runAccel) * Math.min(1, dt * 8);
     if (speed < 1e-3) {
       this.vx = 0;
       this.vz = 0;
@@ -560,10 +563,25 @@ export class PlayerActor {
 
   private pumpRun(dt: number, speed: number): void {
     const moved = Math.hypot(this.vx, this.vz);
-    const stride = this.plant > 0 ? 0.4 : 1;
-    const rate = this.plant > 0 ? 0.45 : 1;
-    this.gait += dt * Math.max(moved, speed) * 3.2 * rate;
-    applyRun(this.rig, this.gait, stride, this.bodyLean);
+    // Pose off real ground speed; the cap only keeps first steps moving.
+    this.stepRun(dt, Math.max(moved, Math.min(speed, 2)));
+  }
+
+  /**
+   * Cadence rises only gently with speed (stride length does most of
+   * the work): about 2.6 steps/s jogging to 4.6 at full sprint.
+   */
+  private stepRun(dt: number, speed: number): void {
+    const plant = Math.min(1, this.plant / PLANT_T);
+    const hz = (0.85 + 0.16 * speed) * (1 - 0.35 * plant);
+    this.gait += dt * hz * Math.PI * 2;
+    this.cutLean *= Math.max(0, 1 - dt * 6);
+    applyRun(this.rig, this.gait, {
+      speed,
+      lean: this.bodyLean + this.cutLean * plant,
+      accel: this.runAccel,
+      plant
+    });
   }
 
   /**
@@ -601,13 +619,21 @@ export class PlayerActor {
     }
     this.vx += fx * along - fz * across;
     this.vz += fz * along + fx * across;
-    const err = Math.abs(wrapPi(desired - heading));
+    this.runAccel += (along / Math.max(dt, 1e-4) - this.runAccel) *
+      Math.min(1, dt * 8);
+    const turnErr = wrapPi(desired - heading);
+    const err = Math.abs(turnErr);
     if (moving && err > PLANT_ANG && speed > PLANT_SPD) {
       this.plant = Math.max(this.plant, PLANT_T);
+      // Heading angles grow toward the runner's left; bank + is right.
+      this.cutLean = -Math.sign(turnErr) * 0.45;
     }
-    // Lean into the actual turning force, not the stick.
+    // Bank into the actual turning force, not the stick. + across
+    // pushes toward the runner's right, and + lean banks right.
     const leanTarget =
-      clampUnit(-across / Math.max(LATERAL * dt, 1e-4)) * 0.34;
+      clampUnit(across / Math.max(LATERAL * dt, 1e-4)) *
+      0.42 *
+      Math.min(1, speed / 4);
     this.bodyLean += (leanTarget - this.bodyLean) * Math.min(1, dt * 7);
     this.x += this.vx * dt;
     this.z += this.vz * dt;

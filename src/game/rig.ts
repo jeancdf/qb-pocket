@@ -137,7 +137,7 @@ function kindTarget(
 ): Pose {
   switch (kind) {
     case 'run':
-      return runPose(t, Math.min(1.05, 0.45 + speed / 9));
+      return runPose(t, { speed, lean: 0, accel: 0, plant: 0 });
     case 'throw':
       return throwPose(t);
     case 'catch':
@@ -159,16 +159,24 @@ function kindTarget(
   }
 }
 
+/** What the locomotion is doing right now; drives the run cycle. */
+export interface RunDrive {
+  /** Ground speed, yards per second. */
+  speed: number;
+  /** Body bank into the turn, radians; + leans to the runner's right. */
+  lean: number;
+  /** Along-track acceleration, yd/s²; negative while braking. */
+  accel: number;
+  /** 0–1 while a foot is planted for a hard cut. */
+  plant: number;
+}
+
 export function applyRun(
   rig: PlayerRig,
   phase: number,
-  stride: number,
-  lean = 0
+  drive: RunDrive
 ): void {
-  const pose = runPose(phase, stride);
-  pose.pelvis[2] += lean * 0.45;
-  pose.torso[2] += lean;
-  applyPose(rig, pose, 'run');
+  applyPose(rig, runPose(phase, drive), 'run');
 }
 
 export function applyHitch(rig: PlayerRig): void {
@@ -189,12 +197,17 @@ function setPose(rig: PlayerRig, pose: Pose): void {
   rig.pelvis.position.set(pose.shift, HIP + pose.hop, 0);
   rig.torso.rotation.set(...pose.torso);
   rig.neck.rotation.set(...pose.neck);
-  rig.leftThigh.rotation.set(...pose.lThigh);
-  rig.rightThigh.rotation.set(...pose.rThigh);
+  // Pose thighs use + for hip flexion (knee forward); the joint's +X
+  // swings the leg backward, so flip it here.
+  rig.leftThigh.rotation.set(-pose.lThigh[0], pose.lThigh[1], pose.lThigh[2]);
+  rig.rightThigh.rotation.set(-pose.rThigh[0], pose.rThigh[1], pose.rThigh[2]);
   rig.leftShin.rotation.set(pose.lShin, 0, 0);
   rig.rightShin.rotation.set(pose.rShin, 0, 0);
-  rig.leftFoot.rotation.set(pose.lFoot, 0, 0);
-  rig.rightFoot.rotation.set(pose.rFoot, 0, 0);
+  // Feet stay parallel to the turf; pose foot values add toe-down.
+  const lLeg = pose.pelvis[0] - pose.lThigh[0] + pose.lShin;
+  const rLeg = pose.pelvis[0] - pose.rThigh[0] + pose.rShin;
+  rig.leftFoot.rotation.set(pose.lFoot - lLeg, 0, 0);
+  rig.rightFoot.rotation.set(pose.rFoot - rLeg, 0, 0);
   rig.leftArm.rotation.set(...pose.lArm);
   rig.rightArm.rotation.set(...pose.rArm);
   // Negative X folds the elbow forward (anatomical bend).
@@ -217,34 +230,109 @@ function idlePose(pos: Pos): Pose {
   return skillIdle();
 }
 
-function runPose(phase: number, stride: number): Pose {
-  const s = Math.sin(phase) * 0.7 * stride;
-  const recL = Math.max(0, -s) * 0.9;
-  const recR = Math.max(0, s) * 0.9;
-  const plant = stride < 0.6 ? 0.22 : 0;
-  // Forearm lags the upper pump so elbows read from camera.
-  const lag = Math.sin(phase - 0.4) * 0.7 * stride;
-  const lFore = 0.55 + 0.18 * stride + Math.max(0, -lag) * 0.7;
-  const rFore = 0.55 + 0.18 * stride + Math.max(0, lag) * 0.7;
-  return {
-    pelvis: [0.06, 0, 0],
-    torso: [0.12, 0, 0],
-    lThigh: [s, 0, 0],
-    rThigh: [-s, 0, 0],
-    lShin: 0.22 + recL + plant,
-    rShin: 0.22 + recR + plant,
-    lArm: [-s * 0.9 + 0.12, 0, -0.32],
-    rArm: [s * 0.9 + 0.12, 0, 0.32],
-    lFore,
-    rFore,
-    lHand: [0.18 + s * 0.12, 0, 0.16],
-    rHand: [0.18 - s * 0.12, 0, -0.16],
-    lFoot: 0.1 - recL * 0.32,
-    rFoot: 0.1 - recR * 0.32,
-    neck: [0.04, 0, 0],
-    hop: Math.abs(Math.sin(phase * 2)) * 0.04,
-    shift: 0
+/**
+ * Sprint mechanics per leg phase φ (right leg runs half a cycle
+ * behind): hip swings from extension at toe-off to high knee in front,
+ * the heel folds up under the hip during swing, the knee loads at
+ * mid-stance, the ankle pushes off. Arms counter the legs with bent
+ * elbows, shoulders counter-rotate the hips, and the head stays level.
+ * Speed scales amplitude; acceleration and braking tilt the body; turns
+ * bank the whole runner; a planted cut sinks the hips and shortens the
+ * stride.
+ */
+function runPose(phase: number, d: RunDrive): Pose {
+  const k = Math.min(1.1, Math.max(0.12, d.speed / 8.5));
+  const drive = clampUnit(d.accel / 12);
+  const push = Math.max(0, drive);
+  const brake = Math.max(0, -drive);
+  const pl = clamp01(d.plant);
+  const pelvisX = 0.05 + 0.08 * k + 0.16 * push - 0.14 * brake + 0.12 * pl;
+  const torsoX = 0.05 + 0.1 * k + 0.24 * push - 0.12 * brake + 0.14 * pl;
+  const reach = (0.05 + 0.3 * k) * (1 - 0.3 * brake);
+  const amp = (0.27 + 0.53 * k) * (1 - 0.45 * pl) * (1 - 0.3 * brake);
+  const leg = (f: number) => {
+    const w = wrapAngle(f);
+    // Knee drive peaks early, then the leg paws back so the foot
+    // lands near the hips instead of reaching out in front.
+    const drive = (Math.sin(w + 0.35) + 0.25 * Math.sin(2 * w + 0.7)) / 1.1;
+    // Heel stays folded through the knee drive, unfolds just before
+    // contact (about 0.7 of a half cycle past the drive).
+    const fold = Math.abs(w - 0.15) < 1.9
+      ? Math.pow(Math.cos((Math.PI / 2) * ((w - 0.15) / 1.9)), 0.8)
+      : 0;
+    const load = Math.max(0, -Math.cos(w));
+    return {
+      hip: pelvisX + reach + 0.2 * pl + amp * drive,
+      knee:
+        0.2 + (0.45 + 1.3 * k) * fold * (1 - 0.35 * pl) +
+        (0.2 + 0.15 * k) * load + 0.45 * pl + 0.2 * brake,
+      foot:
+        0.55 * k * Math.pow(Math.max(0, -Math.sin(w)), 2) -
+        0.15 * Math.max(0, Math.sin(w))
+    };
   };
+  const l = leg(phase);
+  const r = leg(phase + Math.PI);
+  const sw = Math.sin(phase);
+  const armAmp = (0.3 + 0.6 * k) * (1 - 0.4 * pl);
+  const yaw = 0.12 * (0.4 + k) * sw;
+  const bank = d.lean;
+  const p: Pose = {
+    pelvis: [pelvisX, -yaw, bank * 0.6],
+    torso: [torsoX, yaw * 1.8, bank * 0.45],
+    lThigh: [l.hip, 0, 0.02],
+    rThigh: [r.hip, 0, -0.02],
+    lShin: l.knee,
+    rShin: r.knee,
+    lArm: [0.1 + armAmp * sw, 0, -0.2 - 0.25 * pl],
+    rArm: [0.1 - armAmp * sw, 0, 0.2 + 0.25 * pl],
+    lFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, -sw),
+    rFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, sw),
+    lHand: [0.12, 0, 0.12],
+    rHand: [0.12, 0, -0.12],
+    lFoot: l.foot,
+    rFoot: r.foot,
+    neck: [0.06 - (pelvisX + torsoX) * 0.7, -yaw * 0.8, -bank * 0.7],
+    hop: 0,
+    shift: 0.025 * sw * (1 - k * 0.5)
+  };
+  // Pelvis rides on the stance leg; when both feet stretch long around
+  // contact the runner is airborne, so cap the dip below mid-stance.
+  const ml = leg(0);
+  const mr = leg(Math.PI);
+  const mid: Pose = {
+    ...p,
+    lThigh: [ml.hip, 0, 0],
+    rThigh: [mr.hip, 0, 0],
+    lShin: ml.knee,
+    rShin: mr.knee
+  };
+  p.hop = Math.max(groundHop(p), groundHop(mid) - 0.04 - 0.03 * k);
+  return p;
+}
+
+const ANKLE_H = 0.1;
+
+/** Pelvis height that puts the lower of the two feet on the turf. */
+function groundHop(p: Pose): number {
+  const drop = (hip: number, knee: number) => {
+    const a = p.pelvis[0] - hip;
+    return THIGH * Math.cos(a) + SHIN * Math.cos(a + knee);
+  };
+  const reach = Math.max(
+    drop(p.lThigh[0], p.lShin),
+    drop(p.rThigh[0], p.rShin)
+  );
+  return ANKLE_H + reach * Math.cos(p.pelvis[2]) - HIP;
+}
+
+function wrapAngle(a: number): number {
+  const t = (a + Math.PI) % (Math.PI * 2);
+  return (t < 0 ? t + Math.PI * 2 : t) - Math.PI;
+}
+
+function clampUnit(v: number): number {
+  return Math.min(1, Math.max(-1, v));
 }
 
 function hitchPose(): Pose {
@@ -260,8 +348,8 @@ function hitchPose(): Pose {
   p.rFore = 1.12;
   p.lHand = [0.12, 0, 0.18];
   p.rHand = [0.16, 0, -0.16];
-  p.lFoot = -0.35;
-  p.rFoot = -0.42;
+  p.lFoot = 0;
+  p.rFoot = 0;
   p.neck = [0.06, 0.1, 0];
   p.hop = 0;
   return p;
@@ -378,19 +466,20 @@ function catchPose(t = 0): Pose {
 
 /** QB backpedals facing upfield, ball carried at the chest. */
 function dropbackPose(phase: number, speed: number): Pose {
-  const stride = Math.min(0.9, 0.35 + speed / 10);
-  const s = Math.sin(phase) * 0.55 * stride;
+  const k = Math.min(1, speed / 5);
+  const f = Math.sin(phase);
   const p = qbIdle();
-  p.pelvis = [0.1, 0, 0];
-  p.torso = [0.02, Math.sin(phase) * 0.05, 0];
-  p.lThigh = [0.3 + s, 0, 0.04];
-  p.rThigh = [0.3 - s, 0, -0.04];
-  p.lShin = 0.45 + Math.max(0, s) * 0.8;
-  p.rShin = 0.45 + Math.max(0, -s) * 0.8;
-  p.lFoot = -0.3 - Math.max(0, s) * 0.3;
-  p.rFoot = -0.3 - Math.max(0, -s) * 0.3;
-  p.neck = [0.02, 0, 0];
-  p.hop = Math.abs(Math.sin(phase)) * 0.03;
+  p.pelvis = [0.12, 0.05 * f, 0];
+  p.torso = [0.02, -0.06 * f, 0];
+  // Feet reach back under the hips; the lifting knee folds high.
+  p.lThigh = [0.28 - 0.3 * k * f, 0, 0.04];
+  p.rThigh = [0.28 + 0.3 * k * f, 0, -0.04];
+  p.lShin = 0.4 + 0.7 * k * Math.max(0, f);
+  p.rShin = 0.4 + 0.7 * k * Math.max(0, -f);
+  p.lFoot = 0.25 * k * Math.max(0, -f);
+  p.rFoot = 0.25 * k * Math.max(0, f);
+  p.neck = [0.0, 0, 0];
+  p.hop = groundHop(p);
   return p;
 }
 
@@ -401,7 +490,7 @@ function plantPose(t: number): Pose {
   deep.torso = [0.2, 0, 0];
   deep.rThigh = [-0.1, 0, -0.06];
   deep.rShin = 0.5;
-  deep.rFoot = -0.1;
+  deep.rFoot = 0.1;
   deep.lThigh = [0.46, 0, 0.05];
   deep.lShin = 0.4;
   deep.neck = [0.1, 0, 0];
@@ -415,22 +504,30 @@ function plantPose(t: number): Pose {
 
 /** Ball carrier plants outside the frame and cuts across it. */
 function jukePose(t: number): Pose {
-  const p = runPose(t * Math.PI * 2, 0.58);
   const side = Math.sin(Math.min(1, t) * Math.PI);
-  p.pelvis = [0.18, side * 0.18, side * -0.32];
-  p.torso = [0.24, side * -0.22, side * -0.48];
-  p.lThigh[2] = 0.2;
-  p.rThigh[2] = -0.34;
+  const p = runPose(t * Math.PI * 1.6, {
+    speed: 5,
+    lean: -0.5 * side,
+    accel: -6 * side,
+    plant: side
+  });
+  p.pelvis[1] += side * 0.18;
+  p.torso[1] += side * -0.22;
   p.rArm = [-0.48, -0.18, 0.38];
   p.rFore = 1.72;
-  p.neck = [0.08, side * 0.18, side * 0.2];
-  p.hop = 0.02;
+  p.neck = [p.neck[0], p.neck[1] + side * 0.18, p.neck[2]];
+  p.hop = groundHop(p);
   return p;
 }
 
 /** A beaten defender overstrides before recovering pursuit. */
 function stumblePose(t: number): Pose {
-  const p = runPose(t * Math.PI * 3, 0.42);
+  const p = runPose(t * Math.PI * 2.2, {
+    speed: 3.5,
+    lean: 0,
+    accel: -8,
+    plant: 0
+  });
   const fall = Math.sin(Math.min(1, t) * Math.PI);
   p.pelvis = [0.38 + fall * 0.3, 0, fall * 0.22];
   p.torso = [0.64 + fall * 0.38, 0, fall * -0.28];
@@ -438,6 +535,7 @@ function stumblePose(t: number): Pose {
   p.rArm = [0.46, -0.1, 0.72];
   p.lFore = 0.28;
   p.rFore = 0.24;
+  p.hop = groundHop(p);
   return p;
 }
 
@@ -576,8 +674,8 @@ function qbIdle(): Pose {
     rFore: 1.7,
     lHand: [0.12, 0.1, 0.18],
     rHand: [0.18, 0.28, -0.08],
-    lFoot: -0.28,
-    rFoot: -0.32,
+    lFoot: 0,
+    rFoot: 0,
     neck: [0.05, 0, 0],
     hop: 0,
     shift: 0
@@ -598,8 +696,8 @@ function skillIdle(): Pose {
     rFore: 1.1,
     lHand: [0.14, 0, 0.16],
     rHand: [0.14, 0, -0.16],
-    lFoot: -0.62,
-    rFoot: -0.58,
+    lFoot: 0,
+    rFoot: 0,
     neck: [0.08, 0, 0],
     hop: 0,
     shift: 0
@@ -620,8 +718,8 @@ function lineIdle(threePoint: boolean): Pose {
     rFore: 1.12,
     lHand: [0.1, 0, 0.18],
     rHand: [0.12, 0, -0.18],
-    lFoot: -0.85,
-    rFoot: -0.78,
+    lFoot: 0,
+    rFoot: 0,
     neck: [0.12, 0, 0],
     hop: 0,
     shift: 0
@@ -643,8 +741,8 @@ function passSetPose(t: number, speed: number): Pose {
     rFore: 1.08,
     lHand: [0.08, 0, 0.12],
     rHand: [0.08, 0, -0.12],
-    lFoot: -0.55,
-    rFoot: -0.55,
+    lFoot: 0,
+    rFoot: 0,
     neck: [0.06, 0, 0],
     hop: 0,
     shift: w * 0.03
@@ -668,8 +766,8 @@ function rushPose(t: number, speed: number): Pose {
     rFore: 0.92 - lag * 0.28,
     lHand: [0.2, 0, 0.14],
     rHand: [0.2, 0, -0.14],
-    lFoot: -0.45 + Math.max(0, -s) * 0.2,
-    rFoot: -0.45 + Math.max(0, s) * 0.2,
+    lFoot: Math.max(0, -s) * 0.3,
+    rFoot: Math.max(0, s) * 0.3,
     neck: [0.1, 0, 0],
     hop: Math.abs(Math.sin(t * 2)) * 0.02,
     shift: 0
@@ -691,8 +789,8 @@ function engagePose(t: number): Pose {
     rFore: 0.72,
     lHand: [0.05, 0, 0.1],
     rHand: [0.05, 0, -0.1],
-    lFoot: -0.7,
-    rFoot: -0.66,
+    lFoot: 0,
+    rFoot: 0,
     neck: [0.14, shove * 0.08, 0],
     hop: 0,
     shift: shove * 0.05
