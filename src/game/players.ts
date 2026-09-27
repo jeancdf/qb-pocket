@@ -293,6 +293,35 @@ export class PlayerActor {
     this.sync();
   }
 
+  /**
+   * Run to where the ball comes down, brake into the spot, and
+   * wait there facing the ball instead of circling it.
+   */
+  meet(
+    to: Vec2,
+    dt: number,
+    speed: number,
+    look: Vec2,
+    ready: AnimKind = 'idle'
+  ): void {
+    this.chasing = true;
+    this.dropping = false;
+    this.wait = 0;
+    const there = this.steer(to, dt, speed, true);
+    const moving = Math.hypot(this.vx, this.vz) > 0.6;
+    if (there && !moving) {
+      this.facePoint(look);
+    }
+    if (!this.tickHold(dt)) {
+      if (there && !moving) {
+        this.setAnim(ready, 0, 0);
+      } else {
+        this.pumpRun(dt, Math.hypot(this.vx, this.vz));
+      }
+    }
+    this.sync();
+  }
+
   /** Run straight upfield after the catch. */
   advance(dt: number, speed: number): void {
     this.chasing = true;

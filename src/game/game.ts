@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { ballisticVel, Football, PASS_FLIGHT_TIME_SCALE } from './ball';
+import { ballisticVel, Football } from './ball';
 import { MaddenCamera } from './camera';
 import {
   COLORS,
@@ -624,7 +624,7 @@ export class FootballGame {
     const z = clamp(shot.landing.z, this.drive.losZ - 1.5, 62);
     shot.landing = { x, z };
     const to = new THREE.Vector3(x, 1.68, z);
-    const time = flightTime(from, to) * shot.timeScale;
+    const time = flightTime(from, to, power);
     const vel = ballisticVel(from, to, time);
     const breaker = nearestEligible(shot.intended, this.eligibles());
     this.flight.launch(shot, { x: from.x, z: from.z }, breaker);
@@ -640,11 +640,9 @@ export class FootballGame {
 
   private leadReceiver(wr: PlayerActor, power: number): Vec2 {
     const from = handPos(this.qb());
-    const scale = (1.4 - power * 0.8) * PASS_FLIGHT_TIME_SCALE * 0.85;
-    let lead = wr.predict(0.68);
+    let lead = wr.predict(0.6);
     for (let i = 0; i < 3; i += 1) {
-      const to = new THREE.Vector3(lead.x, 1.68, lead.z);
-      lead = wr.predict(flightTime(from, to) * scale);
+      lead = wr.predict(flightTime(from, lead, power));
     }
     return lead;
   }
@@ -680,7 +678,8 @@ export class FootballGame {
         // Break on the called spot, then track the real ball.
         const run = this.flight.breakTarget();
         if (run) {
-          p.chase(run.to, dt, run.speed);
+          const ball = { x: this.ball.pos.x, z: this.ball.pos.z };
+          p.meet(run.to, dt, run.speed, ball, 'catch');
           continue;
         }
       }

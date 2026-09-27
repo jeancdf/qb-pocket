@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { BALL_DRAG, COLORS, GRAVITY } from './constants';
 
-export const PASS_FLIGHT_TIME_SCALE = 2.1;
 /** Visual mesh only; pass arc and flight time stay independent. */
 const BALL_VISUAL_SCALE = 1.2;
 const FLIGHT_SIMULATION_STEP = 1 / 120;
@@ -81,8 +80,8 @@ export function ballisticVel(
   to: THREE.Vector3,
   time: number
 ): THREE.Vector3 {
-  // Longer flight time slows passes and gives gravity room to show the arc.
-  const flightTime = time * PASS_FLIGHT_TIME_SCALE;
+  // `time` is the real hang time; power already set it.
+  const flightTime = time;
   const velocity = estimateLaunchVelocity(from, to, flightTime);
   for (let i = 0; i < VELOCITY_CORRECTION_PASSES; i += 1) {
     const landing = simulateFlight(from, velocity, flightTime);

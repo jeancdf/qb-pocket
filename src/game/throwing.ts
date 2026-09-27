@@ -6,7 +6,7 @@
  * only turns situations into numbers and outcomes.
  */
 
-import { CATCH_RADIUS, THROW_SPEED } from './constants';
+import { CATCH_RADIUS } from './constants';
 import { clamp, lerp, xzDist } from './math';
 import type { Vec2 } from './types';
 
@@ -30,8 +30,6 @@ export type CatchOutcome = 'catch' | 'drop' | 'breakup' | 'pick';
 export interface ThrowShot {
   /** 0 = touch lob, 1 = frozen rope. */
   power: number;
-  /** Scale on the base flight time (lob > 1, bullet < 1). */
-  timeScale: number;
   /** Where the QB meant it to go. */
   intended: Vec2;
   /** Where it will actually come down. */
@@ -63,9 +61,13 @@ export function overHold(heldSeconds: number): number {
   return Math.max(0, heldSeconds - OVERCHARGE);
 }
 
-/** Lob floats (×1.4 flight), bullet ropes it in (×0.6). */
-export function flightScale(power: number): number {
-  return lerp(1.4, 0.6, clamp(power, 0, 1));
+/**
+ * Average downfield ball speed (yd/s) for a given power.
+ * NFL throws run ~15 yd/s for a lofted ball up to ~27 for a
+ * rope (45–55 mph velocity, minus the arc).
+ */
+export function ballSpeed(power: number): number {
+  return lerp(15, 27, clamp(power, 0, 1));
 }
 
 /**
@@ -110,7 +112,6 @@ export function makeShot(
   };
   return {
     power: s.power,
-    timeScale: flightScale(s.power),
     intended: { ...s.target },
     landing,
     spread
@@ -182,8 +183,8 @@ function gauss(rng: () => number): number {
   return (rng() + rng() + rng() - 1.5) * 2;
 }
 
-/** Seconds a pass takes from `from` to `to`, before scaling. */
-export function flightTime(from: Vec2, to: Vec2): number {
+/** Real hang time (s) of a pass from `from` to `to`. */
+export function flightTime(from: Vec2, to: Vec2, power: number): number {
   const dist = Math.hypot(to.x - from.x, to.z - from.z);
-  return clamp(dist / THROW_SPEED + 0.18, 0.52, 1.72);
+  return clamp(dist / ballSpeed(power) + 0.1, 0.35, 3.2);
 }

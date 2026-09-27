@@ -287,7 +287,7 @@ export class CoverPlay {
         this.matchRoute(db, job, dt, 1);
         continue;
       }
-      db.chase(this.ballPoint(db, spot), dt, this.pursuitSpeed(job));
+      db.meet(this.ballPoint(db, spot), dt, this.pursuitSpeed(job), spot);
     }
   }
 
@@ -327,7 +327,7 @@ export class CoverPlay {
   ): void {
     const mine = job.match === this.targetId;
     if (mine || xzDist(db, spot) < 7) {
-      db.chase(this.ballPoint(db, spot), dt, this.pursuitSpeed(job));
+      db.meet(this.ballPoint(db, spot), dt, this.pursuitSpeed(job), spot);
       return;
     }
     this.matchRoute(db, job, dt, 1);
