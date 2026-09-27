@@ -22,7 +22,9 @@ export type AnimKind =
   | 'juke'
   | 'stumble'
   | 'tackle'
-  | 'ragdoll';
+  | 'ragdoll'
+  | 'dive'
+  | 'leap';
 
 export interface PlayerRig {
   pos: Pos;
@@ -171,6 +173,10 @@ function kindTarget(
       return catchPose(t);
     case 'juke':
       return jukePose(t, speed < 0 ? -1 : 1);
+    case 'dive':
+      return divePose(t, speed < 0 ? -1 : 1);
+    case 'leap':
+      return leapPose(t);
     case 'stumble':
       return stumblePose(t);
     case 'tackle':
@@ -468,6 +474,52 @@ function catchReach(): Pose {
   p.torso = [-0.12, 0, 0];
   p.neck = [-0.06, 0, 0];
   p.hop = 0.04;
+  return p;
+}
+
+/**
+ * Layout for a ball just out of reach: push off, body goes flat,
+ * arms fully extended past the helmet, then belly-down on the
+ * turf. `dir` rolls the body toward the side of the dive.
+ */
+function divePose(t: number, dir: number): Pose {
+  const u = clamp01(t);
+  const fly = ease(Math.min(1, u / 0.45));
+  const land = u < 0.45 ? 0 : ease((u - 0.45) / 0.55);
+  const p = catchReach();
+  p.pelvis = [1.35 * fly, 0, dir * 0.35 * fly];
+  p.torso = [0.1 * fly, 0, dir * 0.12 * fly];
+  p.lArm = [-2.7 * fly - 1.35 * (1 - fly), 0.12, -0.1];
+  p.rArm = [-2.7 * fly - 1.32 * (1 - fly), -0.12, 0.1];
+  p.lFore = 0.12;
+  p.rFore = 0.12;
+  p.neck = [-0.55 * fly, 0, 0];
+  p.lThigh = [-0.25 * fly, 0, 0.08];
+  p.rThigh = [0.2 * (1 - fly), 0, -0.08];
+  p.lShin = 0.3 + 0.4 * fly;
+  p.rShin = 0.2 + 0.2 * fly;
+  // Airborne at hip height, then flat on the grass.
+  p.hop = 0.12 * Math.sin(Math.min(1, u / 0.45) * Math.PI) -
+    0.6 * fly - 0.1 * land;
+  return p;
+}
+
+/** High point: knees tuck, both arms up over the helmet. */
+function leapPose(t: number): Pose {
+  const u = clamp01(t);
+  const air = Math.sin(u * Math.PI);
+  const p = catchReach();
+  p.lArm = [-2.75, 0.14, -0.08];
+  p.rArm = [-2.7, -0.14, 0.08];
+  p.lFore = 0.18;
+  p.rFore = 0.2;
+  p.torso = [-0.18, 0, 0];
+  p.neck = [-0.4, 0, 0];
+  p.lThigh = [0.55 * air, 0, 0.06];
+  p.rThigh = [0.25 * air, 0, -0.06];
+  p.lShin = 0.3 + 0.9 * air;
+  p.rShin = 0.3 + 0.6 * air;
+  p.hop = 0.62 * air;
   return p;
 }
 

@@ -130,6 +130,9 @@ export interface ContestInput {
   power: number;
   /** A tipped ball is live but wild. */
   tipped: boolean;
+  /** Laying out / leaping: fingertips, not hands. */
+  wrStretch?: boolean;
+  dbStretch?: boolean;
 }
 
 /**
@@ -154,12 +157,19 @@ export function contest(
       pick += 0.18;
     }
     pick *= clamp(1.35 - db! * 0.5, 0.4, 1);
+    if (c.dbStretch) {
+      // Fingertips at full extension: mostly a knockdown.
+      pick *= 0.45;
+    }
     return r < pick ? 'pick' : 'breakup';
   }
   const reach = clamp(wr! / CATCH_RADIUS, 0, 1);
   // Rockets into short windows are hard to hold.
   const heat = clamp((c.ballSpeed - 17) / 14, 0, 1);
   let hands = 0.95 - reach * 0.28 - heat * 0.2;
+  if (c.wrStretch) {
+    hands -= 0.12;
+  }
   if (c.tipped) {
     hands -= 0.3;
   }

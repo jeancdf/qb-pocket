@@ -260,14 +260,18 @@ export class CoverPlay {
    * Nearby zone players break on the throw. Deep defenders preserve the
    * shell against short throws instead of unrealistically swarming downhill.
    */
-  breakOn(dt: number, spot: Vec2): void {
+  breakOn(
+    dt: number,
+    spot: Vec2,
+    busy?: (p: PlayerActor) => boolean
+  ): void {
     this.throwT += dt;
     for (const job of this.jobs) {
       if (isPassRusher(job.id)) {
         continue;
       }
       const db = this.byId.get(job.id);
-      if (!db) {
+      if (!db || busy?.(db)) {
         continue;
       }
       if (this.throwT < this.reactDelay(job)) {

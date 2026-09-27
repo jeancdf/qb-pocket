@@ -9,9 +9,9 @@ import {
   CATCH_HEIGHT_MAX,
   CATCH_HEIGHT_MIN,
   CATCH_RADIUS,
+  GRAVITY,
   HALF_W
 } from './constants';
-import { closestDefender } from './receiver-grade';
 import { isCoverage } from './coverage-play';
 import { isPassRusher } from './line-play';
 import { xzDist } from './math';
@@ -30,9 +30,32 @@ export type FlightResult =
   | { kind: 'tipped'; msg: string }
   | { kind: 'incomplete'; msg: string }
   | { kind: 'pick'; db: PlayerActor }
-  | { kind: 'catch'; wr: PlayerActor };
+  | { kind: 'catch'; wr: PlayerActor; dive: boolean };
 
 const FLYING: FlightResult = { kind: 'flying' };
+
+/** A defender plays the ball inside this without leaving his feet. */
+const DB_REACH = 1.35;
+/** Layout reach (yd) from where the dive starts. */
+const WR_DIVE_REACH = 3.1;
+const DB_DIVE_REACH = 2.4;
+/** A leap adds this much height to the catch window. */
+const LEAP_HEIGHT = 0.75;
+/** How far ahead a player reads the ball before committing. */
+const DIVE_LOOK = 0.34;
+/** Seconds of flight, then of slide, in a layout. */
+const DIVE_AIR = 0.32;
+const DIVE_TOTAL = 0.95;
+const LEAP_TOTAL = 0.6;
+
+interface Dive {
+  kind: 'dive' | 'leap';
+  t: number;
+  to: Vec2;
+  vx: number;
+  vz: number;
+  dir: number;
+}
 
 export class PassFlight {
   /** Where the ball is going (moves when it is tipped). */
@@ -47,8 +70,10 @@ export class PassFlight {
   private closest: number | null = null;
   private wrHandsOff = false;
   private incompMsg = 'INCOMPLETE';
+  private readonly divers = new Map<PlayerActor, Dive>();
 
   clear(): void {
+    this.divers.clear();
     this.aim = null;
     this.breaker = null;
     this.shot = null;
@@ -100,23 +125,35 @@ export class PassFlight {
       this.tipT -= dt;
       return FLYING;
     }
-    if (ball.pos.y < CATCH_HEIGHT_MIN || ball.pos.y > CATCH_HEIGHT_MAX) {
+    this.planDives(ball, eligibles, players, qb);
+    const leaping = [...this.divers.values()].some((d) => d.kind === 'leap');
+    const top = CATCH_HEIGHT_MAX + (leaping ? LEAP_HEIGHT : 0);
+    if (ball.pos.y < CATCH_HEIGHT_MIN || ball.pos.y > top) {
       return FLYING;
     }
     const wr = this.catchWindow(ball, eligibles, qb);
     const db = this.ballHawk(ball, players);
-    const toWr = wr ? xzDist(wr, ball.pos) : null;
-    const toDb = db ? xzDist(db, ball.pos) : null;
+    // Distances normalised to a standing reach, so a stretched
+    // player at the tip of his layout counts as "at the edge".
+    const toWr = wr
+      ? xzDist(wr, ball.pos) * (CATCH_RADIUS / this.reach(wr, ball, true))
+      : null;
+    const toDb = db
+      ? xzDist(db, ball.pos) * (DB_REACH / this.reach(db, ball, false))
+      : null;
     if (!this.atClosest(ball, toWr, toDb)) {
       return FLYING;
     }
+    const wrDive = wr ? this.divers.get(wr)?.kind === 'dive' : false;
     const outcome = contest({
       ballSpeed: ball.vel.length(),
       wrDist: toWr,
       dbDist: toDb,
       sep: wr && db ? xzDist(wr, db) : 99,
       power: this.shot?.power ?? TAP_POWER,
-      tipped: this.tipped
+      tipped: this.tipped,
+      wrStretch: wr ? this.divers.has(wr) : false,
+      dbStretch: db ? this.divers.has(db) : false
     });
     if (!outcome) {
       return FLYING;
@@ -135,7 +172,145 @@ export class PassFlight {
       wr?.lockAnim('stumble', 0.5);
       return { kind: 'tipped', msg: 'DROPPED' };
     }
-    return wr ? { kind: 'catch', wr } : FLYING;
+    return wr ? { kind: 'catch', wr, dive: wrDive } : FLYING;
+  }
+
+  isDiving(p: PlayerActor): boolean {
+    return this.divers.has(p);
+  }
+
+  /** Scripted layout / leap; game.ts hands the diver over here. */
+  moveDiver(p: PlayerActor, dt: number): void {
+    const d = this.divers.get(p);
+    if (!d) {
+      return;
+    }
+    d.t += dt;
+    const face = Math.atan2(d.to.x - p.x, d.to.z - p.z);
+    if (d.kind === 'leap') {
+      const u = d.t / LEAP_TOTAL;
+      const k = u < 0.5 ? 1 : 0.3;
+      p.footwork(d.vx * k, d.vz * k, dt, face, 'leap', u, d.dir);
+      if (d.t >= LEAP_TOTAL) {
+        this.divers.delete(p);
+      }
+      return;
+    }
+    const u = Math.min(1, d.t / DIVE_TOTAL);
+    // Full speed through the air, then belly slide to a stop.
+    const k = d.t < DIVE_AIR
+      ? 1
+      : Math.max(0, 1 - (d.t - DIVE_AIR) / (DIVE_TOTAL - DIVE_AIR)) * 0.5;
+    p.footwork(d.vx * k, d.vz * k, dt, p.facing, 'dive', u, d.dir);
+    if (d.t >= DIVE_TOTAL + 0.6) {
+      this.divers.delete(p);
+    }
+  }
+
+  /** Reach from where he stands, given his dive or leap. */
+  private reach(p: PlayerActor, ball: Football, wr: boolean): number {
+    const d = this.divers.get(p);
+    const stand = wr ? CATCH_RADIUS : DB_REACH;
+    const overhead = ball.pos.y > CATCH_HEIGHT_MAX;
+    if (!d || d.t < 0.08) {
+      return overhead ? 0 : stand;
+    }
+    if (d.kind === 'leap') {
+      return overhead ? stand * 0.8 : stand;
+    }
+    if (overhead) {
+      return 0;
+    }
+    return wr ? WR_DIVE_REACH : DB_DIVE_REACH;
+  }
+
+  /**
+   * Read the ball over the next beat. When it will pass just
+   * out of reach, lay out for it; when it is over his head,
+   * go up for it. Commit late, like a real player.
+   */
+  private planDives(
+    ball: Football,
+    eligibles: PlayerActor[],
+    players: PlayerActor[],
+    qb: PlayerActor
+  ): void {
+    if (ball.vel.y > 2) {
+      return;
+    }
+    const wrs = this.wrHandsOff
+      ? []
+      : eligibles.filter((p) => p !== qb && xzDist(p, ball.pos) < 9);
+    const dbs = players.filter((p) =>
+      isCoverage(p.def.pos) && !isPassRusher(p.def.id) &&
+      xzDist(p, ball.pos) < 9
+    );
+    for (const p of [...wrs, ...dbs]) {
+      if (this.divers.has(p) || p.isDown()) {
+        continue;
+      }
+      this.planOne(p, ball, wrs.includes(p));
+    }
+  }
+
+  private planOne(p: PlayerActor, ball: Football, wr: boolean): void {
+    const stand = wr ? CATCH_RADIUS : DB_REACH;
+    const far = wr ? WR_DIVE_REACH : DB_DIVE_REACH;
+    let best: { t: number; d: number; y: number; x: number; z: number } | null = null;
+    for (let t = 0.02; t <= DIVE_LOOK; t += 0.02) {
+      const y = ball.pos.y + ball.vel.y * t - 0.5 * GRAVITY * t * t;
+      if (y < CATCH_HEIGHT_MIN) {
+        break;
+      }
+      if (y > CATCH_HEIGHT_MAX + LEAP_HEIGHT) {
+        continue;
+      }
+      const x = ball.pos.x + ball.vel.x * t;
+      const z = ball.pos.z + ball.vel.z * t;
+      const d = Math.hypot(x - p.x, z - p.z);
+      if (!best || d < best.d) {
+        best = { t, d, y, x, z };
+      }
+    }
+    if (!best) {
+      return;
+    }
+    const high = best.y > CATCH_HEIGHT_MAX - 0.15;
+    if (high && best.d <= stand) {
+      this.start(p, 'leap', best, 0.26);
+      return;
+    }
+    // Commit only in the last beat, and only when standing
+    // reach will not get there but a layout will.
+    if (best.d > stand && best.d <= far && best.t <= 0.26 && !high) {
+      this.start(p, 'dive', best, DIVE_AIR);
+    }
+  }
+
+  private start(
+    p: PlayerActor,
+    kind: 'dive' | 'leap',
+    at: { t: number; x: number; z: number },
+    reachTime: number
+  ): void {
+    const dx = at.x - p.x;
+    const dz = at.z - p.z;
+    const len = Math.max(0.01, Math.hypot(dx, dz));
+    // Launch so the hands arrive about when the ball does.
+    const need = kind === 'dive' ? Math.max(0, len - 0.6) : len * 0.6;
+    const speed = Math.min(kind === 'dive' ? 8.5 : 4, need / Math.max(at.t, reachTime));
+    const side = (dx * Math.cos(p.facing) - dz * Math.sin(p.facing));
+    this.divers.set(p, {
+      kind,
+      t: 0,
+      to: { x: at.x, z: at.z },
+      vx: (dx / len) * speed,
+      vz: (dz / len) * speed,
+      dir: side >= 0 ? 1 : -1
+    });
+    if (kind === 'dive') {
+      p.facePoint({ x: at.x, z: at.z });
+    }
   }
 
   /**
@@ -149,7 +324,11 @@ export class PassFlight {
     toDb: number | null
   ): boolean {
     const near = Math.min(toWr ?? 99, toDb ?? 99);
-    if (near > CATCH_RADIUS) {
+    const edge = Math.min(
+      toWr === null ? 99 : toWr - CATCH_RADIUS,
+      toDb === null ? 99 : toDb - DB_REACH
+    );
+    if (edge > 0) {
       this.closest = null;
       return false;
     }
@@ -172,14 +351,14 @@ export class PassFlight {
       return null;
     }
     let best: PlayerActor | null = null;
-    let dist = CATCH_RADIUS;
+    let slack = 0;
     for (const p of eligibles) {
       if (p === qb) {
         continue;
       }
-      const n = xzDist(p, ball.pos);
-      if (n <= dist) {
-        dist = n;
+      const n = this.reach(p, ball, true) - xzDist(p, ball.pos);
+      if (n >= slack) {
+        slack = n;
         best = p;
       }
     }
@@ -198,11 +377,16 @@ export class PassFlight {
     const cover = players.filter((p) =>
       isCoverage(p.def.pos) && !isPassRusher(p.def.id)
     );
-    const db = closestDefender(ball.pos, cover);
-    if (!db || xzDist(db, ball.pos) > 1.35) {
-      return null;
+    let best: PlayerActor | null = null;
+    let slack = 0;
+    for (const p of cover) {
+      const n = this.reach(p, ball, false) - xzDist(p, ball.pos);
+      if (n >= slack) {
+        slack = n;
+        best = p;
+      }
     }
-    return db;
+    return best;
   }
 
   /** Ball pops off hands: it stays live but wild. */

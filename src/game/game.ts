@@ -679,6 +679,10 @@ export class FootballGame {
       if (p === qb && this.phase === 'play' && this.scrambling()) {
         continue;
       }
+      if (this.phase === 'throw' && this.flight.isDiving(p)) {
+        this.flight.moveDiver(p, dt);
+        continue;
+      }
       if (this.phase === 'throw' && this.flight.breaker === p) {
         // Break on the called spot, then track the real ball.
         const run = this.flight.breakTarget();
@@ -696,7 +700,11 @@ export class FootballGame {
     if (this.phase === 'play') {
       this.cover.cover(dt);
     } else if (this.phase === 'throw' && this.flight.aim) {
-      this.cover.breakOn(dt, this.flight.aim);
+      this.cover.breakOn(
+        dt,
+        this.flight.aim,
+        (p) => this.flight.isDiving(p)
+      );
     } else if (this.phase === 'yac' && carrier && !this.yac.tackler) {
       this.cover.chaseCarrier(dt, carrier);
       this.line.pursue(dt, carrier);
@@ -835,7 +843,7 @@ export class FootballGame {
         this.intercept(r.db);
         return;
       case 'catch':
-        this.resolveCatch(r.wr);
+        this.resolveCatch(r.wr, r.dive);
         return;
       default:
         return;
@@ -856,14 +864,20 @@ export class FootballGame {
     );
   }
 
-  private resolveCatch(wr: PlayerActor): void {
+  private resolveCatch(wr: PlayerActor, dive = false): void {
     this.yac.start(wr);
-    wr.lockAnim('catch', 0.32);
     this.ball.inAir = false;
     this.ball.hold(wr.rig.rightHand);
+    this.aimMark.hide();
+    if (dive) {
+      // Laid out on the grass: the play ends where he lands.
+      this.toast?.('DIVING CATCH', false);
+      this.endYac();
+      return;
+    }
+    wr.lockAnim('catch', 0.32);
     this.phase = 'yac';
     this.madden.setPhase('throw');
-    this.aimMark.hide();
     this.toast?.('COMPLETE', false);
   }
 
