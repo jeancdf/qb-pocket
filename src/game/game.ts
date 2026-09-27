@@ -914,6 +914,11 @@ export class FootballGame {
       this.madden.follow(carrier.x, carrier.z, dt);
       return;
     }
+    if (this.phase === 'throw' && this.ball.inAir) {
+      const b = this.ball.pos;
+      this.madden.followBall(b.x, b.y, b.z, dt);
+      return;
+    }
     if (live) {
       const qb = this.qb();
       this.madden.follow(qb.x, qb.z, dt);

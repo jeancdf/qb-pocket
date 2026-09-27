@@ -23,6 +23,10 @@ const PUNCH_RATE = 5.5;
 const ZOOM_MIN = 0.72;
 const ZOOM_MAX = 1.38;
 const FOLLOW = 3.8;
+// Ball in the air: track it faster, and raise the whole rig with
+// the ball's height so the top of the arc stays in frame.
+const BALL_FOLLOW = 7;
+const BALL_LIFT = 0.6;
 const POCKET_BACK = 5;
 
 export class MaddenCamera {
@@ -34,6 +38,7 @@ export class MaddenCamera {
   private subjectX = 0;
   private subjectZ = LOS_Z - POCKET_BACK;
   private ahead = LOOK_AHEAD;
+  private lift = 0;
   private losZ = LOS_Z;
   private attached = false;
   private punch = false;
@@ -69,9 +74,11 @@ export class MaddenCamera {
       this.subjectX = 0;
       this.subjectZ = this.losZ - POCKET_BACK;
       this.ahead = LOOK_AHEAD;
+      this.lift = 0;
     }
   }
 
+  /** Track the QB or the ball carrier. */
   follow(qbX: number, qbZ: number, dt: number): void {
     if (this.phase !== 'play' && this.phase !== 'throw') {
       return;
@@ -79,8 +86,24 @@ export class MaddenCamera {
     const k = 1 - Math.exp(-dt * FOLLOW);
     this.subjectX = lerp(this.subjectX, qbX, k);
     this.subjectZ = lerp(this.subjectZ, qbZ, k);
+    this.lift = lerp(this.lift, 0, k);
     const extra = this.phase === 'throw' ? THROW_AHEAD : 0;
     this.ahead = lerp(this.ahead, LOOK_AHEAD + extra, k);
+  }
+
+  /**
+   * Pass in the air: ride with the ball down the field. Still
+   * straight behind it on the field axis, never yawed.
+   */
+  followBall(x: number, y: number, z: number, dt: number): void {
+    if (this.phase !== 'throw') {
+      return;
+    }
+    const k = 1 - Math.exp(-dt * BALL_FOLLOW);
+    this.subjectX = lerp(this.subjectX, x, k);
+    this.subjectZ = lerp(this.subjectZ, z, k);
+    this.lift = lerp(this.lift, Math.max(0, y) * BALL_LIFT, k);
+    this.ahead = lerp(this.ahead, LOOK_AHEAD, k);
   }
 
   /** Tight zoom while a tackle lands. */
@@ -95,6 +118,7 @@ export class MaddenCamera {
     this.subjectX = 0;
     this.subjectZ = this.losZ - POCKET_BACK;
     this.ahead = LOOK_AHEAD;
+    this.lift = 0;
     this.writePose();
   }
 
@@ -112,7 +136,7 @@ export class MaddenCamera {
 
   private writePose(): void {
     const lookZ = this.subjectZ + this.ahead;
-    this.look.set(this.subjectX, LOOK_Y, lookZ);
+    this.look.set(this.subjectX, LOOK_Y + this.lift, lookZ);
     this.cam.position.set(
       this.look.x,
       this.look.y + HEIGHT * this.zoom,
