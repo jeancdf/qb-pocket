@@ -36,6 +36,11 @@ export function isPassRusher(id: string): boolean {
   return rushing.has(id);
 }
 
+/** Everyone hunting the QB this snap (edge + blitzers). */
+export function passRushers(): string[] {
+  return [...rushing];
+}
+
 interface Spec {
   ol: string;
   dl: string;
@@ -72,6 +77,8 @@ export class LinePlay {
   private helpDl?: PlayerActor;
   private t = 0;
   private losZ = LOS_Z;
+  private blitz?: string[];
+  private spy = true;
 
   constructor(byId: Map<string, PlayerActor>) {
     this.byId = byId;
@@ -80,6 +87,16 @@ export class LinePlay {
       this.tryAdd(s);
     }
     this.pickRushers();
+  }
+
+  /**
+   * Defensive call for the next snap: extra blitzers (LB/S)
+   * and whether an unused Mike spies. Undefined blitz keeps
+   * the old coin-flip Mike rush.
+   */
+  setPackage(blitz: string[] | undefined, spy: boolean): void {
+    this.blitz = blitz;
+    this.spy = spy;
   }
 
   /** Clears locks and picks 1–2 rushers for this snap. */
@@ -139,6 +156,12 @@ export class LinePlay {
     this.rushers.length = 0;
     const edge = Math.random() < 0.5 ? 'lde' : 'rde';
     this.addRusher(edge);
+    if (this.blitz) {
+      for (const id of this.blitz) {
+        this.addRusher(id);
+      }
+      return;
+    }
     if (Math.random() < 0.55) {
       this.addRusher('mlb');
     }
@@ -170,7 +193,8 @@ export class LinePlay {
       this.poseRush(p, qb);
       return;
     }
-    const spd = edge ? EDGE_RUSH : LB_RUSH;
+    const spd = edge ? EDGE_RUSH
+      : p.def.pos === 'S' ? LB_RUSH + 0.35 : LB_RUSH;
     if (this.t < 0.42) {
       seek(p, this.gate(p, edge), spd, dt);
     } else {
@@ -200,7 +224,7 @@ export class LinePlay {
    */
   private spyMike(dt: number, qb: PlayerActor): void {
     const p = this.byId.get('mlb');
-    if (!p || isPassRusher('mlb')) {
+    if (!p || !this.spy || isPassRusher('mlb')) {
       return;
     }
     const hold = {

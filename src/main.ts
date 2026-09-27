@@ -80,8 +80,9 @@ window.addEventListener('keydown', (ev) => {
   if (ev.key === 'm' || ev.key === 'M') {
     game.sendMotion();
   }
-  if (ev.key >= '1' && ev.key <= '4' && game.phase === 'presnap') {
-    game.selectPlay(Number(ev.key) - 1);
+  if (/^[0-9]$/.test(ev.key) && game.phase === 'presnap') {
+    // 1–9 then 0 for the tenth play.
+    game.selectPlay(ev.key === '0' ? 9 : Number(ev.key) - 1);
     paintHud();
     return;
   }

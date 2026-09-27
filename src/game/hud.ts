@@ -144,7 +144,7 @@ export class Hud {
       btn.type = 'button';
       btn.dataset.idx = String(i);
       btn.classList.toggle('is-on', i === idx);
-      btn.append(`${i + 1} ${p.name}`);
+      btn.append(`${(i + 1) % 10} ${p.name}`);
       const beat = document.createElement('span');
       beat.className = 'beat';
       beat.textContent = `vs ${p.beat}`;

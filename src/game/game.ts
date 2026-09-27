@@ -17,22 +17,23 @@ import {
 } from './constants';
 import {
   CoverPlay,
-  COVER2,
   COVER3,
   isCoverage,
   nearestEligible,
   type CoverLook
 } from './coverage-play';
 import { closestDefender, gradeReceiver } from './coverage';
+import { lookStarts, pickLook } from './coverage-looks';
 import { Drive } from './drive';
 import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
 import { makeTeamMats } from './materials';
 import { clamp, lerp, xzDist } from './math';
-import { isPassRusher, LinePlay } from './line-play';
+import { isPassRusher, LinePlay, passRushers } from './line-play';
 import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
+import { QbEyes } from './qb-eyes';
 import {
   BALL_READ_DELAY,
   chargePower,
@@ -136,6 +137,7 @@ export class FootballGame {
   private whistleT = 0;
   private playIdx = 0;
   private look: CoverLook = COVER3;
+  private readonly eyes = new QbEyes();
   private motionOn = false;
   private motionIdx = 0;
   private stickX = 0;
@@ -167,7 +169,7 @@ export class FootballGame {
     this.scene.add(this.aimMark);
     this.spawn();
     this.line = new LinePlay(this.byId);
-    this.cover = new CoverPlay(this.byId);
+    this.cover = new CoverPlay(this.byId, this.eyes);
     this.huddle();
     this.resize();
   }
@@ -196,6 +198,8 @@ export class FootballGame {
     this.madden.setPhase('play');
     this.ball.hold(this.qb().rig.rightHand);
     this.setRoutes(false);
+    this.eyes.reset();
+    this.cover.startSnap(PLAYS[this.playIdx].pa ?? false);
   }
 
   reset(): void {
@@ -211,7 +215,7 @@ export class FootballGame {
     this.huddle();
   }
 
-  /** Pre-snap audible. 0–3 indexes PLAYS. */
+  /** Pre-snap audible. Indexes PLAYS (keys 1–9, 0). */
   selectPlay(i: number): void {
     if (this.phase !== 'presnap' || this.drive.over()) {
       return;
@@ -223,9 +227,12 @@ export class FootballGame {
     this.motionOn = false;
     this.motionIdx = 0;
     this.applyOffense();
+    this.applyDefense();
     const los = this.drive.losZ;
-    for (const id of THROW_ORDER) {
-      this.byId.get(id)?.align(los);
+    for (const p of this.players) {
+      if (p.def.eligible || this.cover.jobOf(p.def.id)?.kind === 'man') {
+        p.align(los);
+      }
     }
     this.rebuildGhosts();
   }
@@ -367,6 +374,7 @@ export class FootballGame {
     if (this.charge?.target.kind === 'spot') {
       this.charge.target.spot = spot;
     }
+    this.eyes.look(spot);
     this.aimMark.visible = true;
     this.aimMark.position.set(spot.x, 0.06, spot.z);
   }
@@ -380,6 +388,9 @@ export class FootballGame {
     this.tickCharge(dt);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
+    if (this.phase === 'play') {
+      this.tickEyes(dt);
+    }
     this.ball.update(dt);
     if (this.ball.inAir) {
       this.flightPeak = Math.max(this.flightPeak, this.ball.pos.y);
@@ -455,13 +466,14 @@ export class FootballGame {
   readHint(): string {
     const play = PLAYS[this.playIdx].id;
     const c3 = this.look.id === 'c3';
+    const c2 = this.look.id === 'c2';
     if (c3 && play === 'smash') {
       return 'CBs bail — hitch is hot';
     }
-    if (!c3 && play === 'smash') {
+    if (c2 && play === 'smash') {
       return 'CBs squat — audible Slants';
     }
-    if (!c3 && play === 'slants') {
+    if (c2 && play === 'slants') {
       return 'Slants vs Cover 2';
     }
     if (c3 && play === 'flood') {
@@ -469,6 +481,13 @@ export class FootballGame {
     }
     if (play === 'mesh') {
       return 'Throw the crossing mesh';
+    }
+    if (this.look.rush?.length) {
+      return 'Blitz look — find the hot route fast';
+    }
+    const hint = PLAYS[this.playIdx].hint;
+    if (hint) {
+      return hint;
     }
     return `${PLAYS[this.playIdx].name} vs ${this.look.name}`;
   }
@@ -553,7 +572,7 @@ export class FootballGame {
       case 'presnap':
         return this.drive.over()
           ? 'Drive over. RESET from the 10.'
-          : '1–4 audible · M motion · SNAP · ZQSD scramble.';
+          : '1–0 audible · M motion · SNAP · ZQSD scramble.';
       case 'play':
         return 'Hold on grass or 1–5, release to throw. Longer = harder.';
       case 'throw':
@@ -596,6 +615,29 @@ export class FootballGame {
       return 0;
     }
     return Math.max(0, SACK_TIME - this.clock);
+  }
+
+  /**
+   * The QB's eyes: cursor hover, or the receiver he is winding
+   * up on. Play-action turns him to the RB for the fake first.
+   */
+  private tickEyes(dt: number): void {
+    const winding = this.chargingOn();
+    const wr = winding ? this.byId.get(winding) : undefined;
+    if (wr) {
+      this.eyes.look(wr);
+    }
+    const rb = this.byId.get('rb');
+    const fake = PLAYS[this.playIdx].pa && this.clock < 0.6 && rb
+      ? { x: rb.x, z: rb.z }
+      : null;
+    this.eyes.tick(
+      dt,
+      this.eligibles(),
+      this.qb(),
+      !this.scrambling(),
+      fake
+    );
   }
 
   private canThrow(): boolean {
@@ -685,6 +727,7 @@ export class FootballGame {
     this.incompMsg = 'INCOMPLETE';
     this.aim = { x, z };
     this.breaker = nearestEligible(shot.intended, this.eligibles());
+    this.cover.onThrow(this.breaker?.def.id ?? null);
     this.aimMark.visible = true;
     this.aimMark.scale.setScalar(1);
     (this.aimMark.material as THREE.MeshBasicMaterial).color
@@ -1012,10 +1055,11 @@ export class FootballGame {
     this.incompMsg = 'INCOMPLETE';
     this.motionOn = false;
     this.motionIdx = 0;
-    this.look = Math.random() < 0.5 ? COVER3 : COVER2;
+    this.look = pickLook();
     this.cover.setLook(this.look);
-    this.applyDefense();
+    this.line.setPackage(this.look.rush, this.look.spy ?? true);
     this.applyOffense();
+    this.applyDefense();
     const los = this.drive.losZ;
     for (const p of this.players) {
       p.align(los);
@@ -1087,7 +1131,7 @@ export class FootballGame {
 
   private checkSack(): void {
     const qb = this.qb();
-    const ends = [this.byId.get('lde'), this.byId.get('rde')];
+    const ends = passRushers().map((id) => this.byId.get(id));
     const hit = ends.some(
       (d) => d && xzDist(qb, d) < SACK_RANGE
     );
@@ -1338,7 +1382,8 @@ export class FootballGame {
   }
 
   private applyDefense(): void {
-    for (const [id, start] of Object.entries(this.look.starts)) {
+    const starts = lookStarts(this.look, PLAYS[this.playIdx]);
+    for (const [id, start] of Object.entries(starts)) {
       this.byId.get(id)?.setStart(start);
     }
   }

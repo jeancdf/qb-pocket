@@ -13,11 +13,12 @@
 
 import { LOS_Z } from './constants';
 import { isPassRusher } from './line-play';
-import { clamp, xzDist } from './math';
+import { clamp, lerp, xzDist } from './math';
 import type { PlayerActor } from './players';
+import type { EyeRead, QbEyes } from './qb-eyes';
 import type { Pos, Vec2 } from './types';
 
-type ZoneId =
+export type ZoneId =
   | 'deepLeft'
   | 'deepMiddle'
   | 'deepRight'
@@ -27,9 +28,13 @@ type ZoneId =
   | 'leftHook'
   | 'middleHook'
   | 'rightHook'
-  | 'rightFlat';
+  | 'rightFlat'
+  | 'quarterLeft'
+  | 'quarterMidLeft'
+  | 'quarterMidRight'
+  | 'quarterRight';
 
-interface Job {
+export interface Job {
   id: string;
   match: string;
   zone: ZoneId;
@@ -39,6 +44,15 @@ interface Job {
   minRel: number;
   maxRel: number;
   anticipate: number;
+  /**
+   * 'man' trails `match` wherever he goes (levX = inside
+   * leverage, levZ = cushion). Zone is the default.
+   */
+  kind?: 'zone' | 'man';
+  /** 0–1: how hard this zone player jumps the QB's eyes. */
+  reads?: number;
+  /** Man alignment depth off the ball (yards). */
+  press?: number;
 }
 
 interface Zone {
@@ -57,6 +71,10 @@ export interface CoverLook {
   name: string;
   jobs: Job[];
   starts: Record<string, Vec2>;
+  /** Extra blitzers on top of the edge rusher (LB / S ids). */
+  rush?: string[];
+  /** Mike spies the QB when he has no job (default true). */
+  spy?: boolean;
 }
 
 const L = LOS_Z;
@@ -167,8 +185,26 @@ const ZONES: Record<ZoneId, Zone> = {
     depthCost: 0.42,
     verticalValue: 0,
     deep: false
-  }
+  },
+  quarterLeft: quarter(-18, -26, -9),
+  quarterMidLeft: quarter(-6, -14, 2),
+  quarterMidRight: quarter(6, -2, 14),
+  quarterRight: quarter(18, 9, 26)
 };
+
+/** Cover 4: four deep quarters that match vertical threats. */
+function quarter(centerX: number, minX: number, maxX: number): Zone {
+  return {
+    centerX,
+    depth: 18,
+    minX,
+    maxX,
+    lateralCost: 0.7,
+    depthCost: 0.1,
+    verticalValue: 0.3,
+    deep: true
+  };
+}
 
 const C3_JOBS: Job[] = [
   {
@@ -202,7 +238,8 @@ const C3_JOBS: Job[] = [
     spd: 5.81,
     minRel: 12,
     maxRel: 42,
-    anticipate: 0.75
+    anticipate: 0.75,
+    reads: 0.9
   },
   {
     id: 'ss',
@@ -344,14 +381,68 @@ export function isCoverage(pos: Pos): boolean {
   return pos === 'CB' || pos === 'S' || pos === 'LB';
 }
 
+/** Eye-read weight when a job does not set its own. */
+function readsOf(job: Job, db: PlayerActor): number {
+  if (job.reads !== undefined) {
+    return job.reads;
+  }
+  if (job.kind === 'man') {
+    return 0;
+  }
+  if (db.def.pos === 'S') {
+    return 0.75;
+  }
+  if (db.def.pos === 'LB') {
+    return 0.55;
+  }
+  return 0.3;
+}
+
+const PA_BITE = 0.75;
+const PA_FREEZE = 0.45;
+
 export class CoverPlay {
   private readonly byId: Map<string, PlayerActor>;
   private readonly matches = new Map<string, string>();
+  private readonly eyes?: QbEyes;
   private losZ = LOS_Z;
   private jobs: Job[] = COVER3.jobs;
+  private snapT = 0;
+  private playAction = false;
+  private throwT = 0;
+  private throwRead: EyeRead = 'neutral';
+  private targetId: string | null = null;
 
-  constructor(byId: Map<string, PlayerActor>) {
+  constructor(byId: Map<string, PlayerActor>, eyes?: QbEyes) {
     this.byId = byId;
+    this.eyes = eyes;
+  }
+
+  /** Called on the snap: clears the throw read, arms play-action. */
+  startSnap(playAction: boolean): void {
+    this.snapT = 0;
+    this.playAction = playAction;
+    this.throwT = 0;
+    this.throwRead = 'neutral';
+    this.targetId = null;
+  }
+
+  /**
+   * Ball is out. The eyes decide how early the defense breaks:
+   * staring the target lets them jump it, a look-off freezes them.
+   */
+  onThrow(targetId: string | null): void {
+    this.throwT = 0;
+    this.targetId = targetId;
+    this.throwRead = this.eyes?.readOn(targetId) ?? 'neutral';
+  }
+
+  lastRead(): EyeRead {
+    return this.throwRead;
+  }
+
+  jobOf(id: string): Job | undefined {
+    return this.jobs.find((j) => j.id === id);
   }
 
   setLos(z: number): void {
@@ -365,6 +456,7 @@ export class CoverPlay {
 
   /** Zone-match while the ball is still in the QB's hands. */
   cover(dt: number): void {
+    this.snapT += dt;
     for (const job of this.jobs) {
       if (isPassRusher(job.id)) {
         continue;
@@ -382,6 +474,7 @@ export class CoverPlay {
    * shell against short throws instead of unrealistically swarming downhill.
    */
   breakOn(dt: number, spot: Vec2): void {
+    this.throwT += dt;
     for (const job of this.jobs) {
       if (isPassRusher(job.id)) {
         continue;
@@ -390,17 +483,68 @@ export class CoverPlay {
       if (!db) {
         continue;
       }
+      if (this.throwT < this.reactDelay(job)) {
+        this.matchRoute(db, job, dt, 1);
+        continue;
+      }
+      if (job.kind === 'man') {
+        this.manBreak(db, job, dt, spot);
+        continue;
+      }
       const stayHigh = this.stayHigh(job, spot);
       if (stayHigh) {
         this.matchRoute(db, job, dt, 0.62);
         continue;
       }
-      if (xzDist(db, spot) > 11.5) {
+      const reach = this.throwRead === 'stared' ? 14.5 : 11.5;
+      if (xzDist(db, spot) > reach) {
         this.matchRoute(db, job, dt, 1);
         continue;
       }
-      db.chase(spot, dt, this.pursuitSpeed(job));
+      db.chase(this.ballPoint(db, spot), dt, this.pursuitSpeed(job));
     }
+  }
+
+  /** Seconds before this defender reacts to the ball leaving. */
+  private reactDelay(job: Job): number {
+    const base = job.kind === 'man' ? 0.16 : 0.3;
+    if (this.throwRead === 'stared') {
+      return base * 0.25;
+    }
+    if (this.throwRead === 'lookoff') {
+      return base + 0.38;
+    }
+    return base;
+  }
+
+  /**
+   * Play the ball, not the man: attack the catch point from the
+   * QB side so a defender with position can undercut the throw.
+   */
+  private ballPoint(db: PlayerActor, spot: Vec2): Vec2 {
+    const qb = this.byId.get('qb');
+    if (!qb || db.z < spot.z) {
+      return spot;
+    }
+    const dx = qb.x - spot.x;
+    const dz = qb.z - spot.z;
+    const d = Math.hypot(dx, dz) || 1;
+    return { x: spot.x + (dx / d) * 0.6, z: spot.z + (dz / d) * 0.6 };
+  }
+
+  /** Man defender: stay on his man unless the ball is his way. */
+  private manBreak(
+    db: PlayerActor,
+    job: Job,
+    dt: number,
+    spot: Vec2
+  ): void {
+    const mine = job.match === this.targetId;
+    if (mine || xzDist(db, spot) < 7) {
+      db.chase(this.ballPoint(db, spot), dt, this.pursuitSpeed(job));
+      return;
+    }
+    this.matchRoute(db, job, dt, 1);
   }
 
   private stayHigh(job: Job, spot: Vec2): boolean {
@@ -436,10 +580,93 @@ export class CoverPlay {
     dt: number,
     speedFactor: number
   ): void {
+    if (job.kind === 'man') {
+      this.manCover(db, job, dt, speedFactor);
+      return;
+    }
     const receiver = this.pickMatch(job);
-    const shade = this.shade(job, receiver);
+    let shade = this.shade(job, receiver);
+    shade = this.readEyes(db, job, shade);
+    shade = this.sellFake(db, job, shade);
     db.chase(shade, dt, job.spd * speedFactor);
     this.keepEyesOnPlay(db, receiver);
+  }
+
+  /**
+   * Man: mirror the receiver with inside leverage and a small
+   * cushion. The chase lags on hard breaks, which is exactly
+   * where a good route wins.
+   */
+  private manCover(
+    db: PlayerActor,
+    job: Job,
+    dt: number,
+    speedFactor: number
+  ): void {
+    const wr = this.byId.get(job.match);
+    if (!wr) {
+      return;
+    }
+    const future = wr.predict(job.anticipate);
+    const inside = -Math.sign(wr.x) || 1;
+    const depth = future.z - this.losZ;
+    // Cushion grows on vertical stems so he stays on top.
+    const cushion = job.levZ + clamp((depth - 8) * 0.05, 0, 0.9);
+    const to = {
+      x: future.x + inside * job.levX,
+      z: Math.max(this.losZ + 0.6, future.z + cushion)
+    };
+    db.chase(to, dt, job.spd * speedFactor);
+  }
+
+  /**
+   * Zone defenders drift toward the receiver the QB stares at.
+   * Deep players get over the top, underneath players undercut.
+   */
+  private readEyes(db: PlayerActor, job: Job, shade: Vec2): Vec2 {
+    const focus = this.eyes?.focus();
+    const reads = readsOf(job, db);
+    if (!focus || reads <= 0) {
+      return shade;
+    }
+    const w = reads * clamp((focus.stare - 0.3) / 0.9, 0, 1);
+    const wr = this.byId.get(focus.id);
+    if (w <= 0 || !wr) {
+      return shade;
+    }
+    const zone = ZONES[job.zone];
+    const future = wr.predict(0.5);
+    if (future.x < zone.minX - 7 || future.x > zone.maxX + 7) {
+      return shade;
+    }
+    const minZ = this.losZ + job.minRel;
+    const maxZ = this.losZ + job.maxRel + 4;
+    const want = zone.deep
+      ? { x: future.x, z: Math.max(future.z + 3, shade.z) }
+      : { x: future.x, z: future.z - 0.8 };
+    const to = {
+      x: want.x,
+      z: clamp(want.z, minZ, maxZ)
+    };
+    return {
+      x: lerp(shade.x, to.x, w),
+      z: lerp(shade.z, to.z, w)
+    };
+  }
+
+  /** Play-action: LBs step downhill, safeties freeze a beat. */
+  private sellFake(db: PlayerActor, job: Job, shade: Vec2): Vec2 {
+    if (!this.playAction) {
+      return shade;
+    }
+    if (db.def.pos === 'LB' && this.snapT < PA_BITE) {
+      return { x: db.x * 0.9, z: this.losZ + 1.2 };
+    }
+    if (ZONES[job.zone].deep && db.def.pos === 'S' &&
+        this.snapT < PA_FREEZE) {
+      return { x: db.x, z: db.z };
+    }
+    return shade;
   }
 
   private pickMatch(job: Job): PlayerActor | undefined {
