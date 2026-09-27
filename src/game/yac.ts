@@ -18,13 +18,22 @@ const SPRINT_REFILL = 0.5;
 /** Pause between two jukes. */
 const JUKE_COOLDOWN = 0.9;
 const TACKLE_SETTLE_TIME = 1.65;
-const JUKE_CHANCE = 0.54;
-const JUKE_RANGE = 3.15;
-const JUKE_TIME = 0.82;
+/** Defender must be this close for a juke to have a victim. */
+const JUKE_RANGE = 4.8;
+/** Plant: sink and brake on the outside foot. */
+const PLANT_TIME = 0.16;
+/** Cut: explode sideways off that foot. */
+const CUT_TIME = 0.3;
+const CUT_LATERAL = 7.2;
+const CUT_FORWARD = 2.4;
+/** After the cut: legs gather, top speed comes back. */
+const RECOVER_TIME = 0.35;
+/** A beaten defender slides past for this long. */
+const STAGGER_TIME = 0.8;
 
 export type JukeState =
   | 'none'
-  | 'approach'
+  | 'plant'
   | 'cut'
   | 'escaped'
   | 'stuffed'
@@ -41,8 +50,11 @@ export class YacRun {
   state: JukeState = 'none';
   lastJuke: JukeResult = null;
   lastTacklerId: string | null = null;
-  private jukeTarget: Vec2 | null = null;
-  private requested = 0;
+  private jukeDir = 1;
+  /** Heading and speed at the moment of the plant. */
+  private jukeFace = 0;
+  private jukeEntry = 0;
+  private jukeWon = false;
   private yacT = 0;
   private jukeT = 0;
   private tackleT = 0;
@@ -62,8 +74,8 @@ export class YacRun {
     this.front = null;
     this.tackler = null;
     this.state = 'none';
-    this.jukeTarget = null;
-    this.requested = 0;
+    this.jukeDir = 1;
+    this.jukeWon = false;
     this.yacT = 0;
     this.jukeT = 0;
     this.tackleT = 0;
@@ -95,25 +107,32 @@ export class YacRun {
   }
 
   /**
-   * Space: cut on the nearest defender. `direction` is the world
-   * side (+x / -x); 0 means cut away from him.
+   * Space: plant and cut. `direction` is the world side (+x/-x)
+   * from the stick; 0 cuts away from the nearest defender.
    */
   requestJuke(direction: number): void {
     const wr = this.carrier;
     if (!wr || wr.isDown() || this.jukeCool > 0) {
       return;
     }
-    if (this.state === 'cut' || this.state === 'down') {
+    if (this.state === 'plant' || this.state === 'cut' ||
+        this.state === 'down') {
       return;
     }
     const front = this.nearestDefender(wr);
-    if (!front || xzDist(front, wr) > JUKE_RANGE + 1.5) {
-      return;
+    this.front = front && xzDist(front, wr) <= JUKE_RANGE ? front : null;
+    let dir = direction === 0 ? 0 : direction < 0 ? -1 : 1;
+    if (dir === 0) {
+      dir = this.front && this.front.x > wr.x ? -1 : 1;
     }
-    this.front = front;
-    this.state = 'approach';
-    this.requested = direction === 0 ? 0 : direction < 0 ? -1 : 1;
-    this.beginJuke(wr);
+    const v = wr.velocity();
+    this.jukeDir = dir;
+    this.jukeEntry = Math.hypot(v.x, v.z);
+    this.jukeFace = this.jukeEntry > 0.5
+      ? Math.atan2(v.x, v.z)
+      : wr.facing;
+    this.state = 'plant';
+    this.jukeT = 0;
   }
 
   /**
@@ -136,8 +155,8 @@ export class YacRun {
     }
     const top = this.carrierSpeed(wr === qb) *
       this.sprintFactor(dt, sprint);
-    if (this.state === 'cut' && this.jukeTarget) {
-      wr.chase(this.jukeTarget, dt, top);
+    if (this.state === 'plant' || this.state === 'cut') {
+      this.footwork(wr, dt);
       return;
     }
     const length = Math.hypot(stick.x, stick.z);
@@ -217,14 +236,13 @@ export class YacRun {
 
   status(): string {
     switch (this.state) {
-      case 'approach':
-        return 'ZQSD to steer, Shift to sprint, Space to juke.';
+      case 'plant':
       case 'cut':
-        return 'Juke in progress — the outcome is not guaranteed.';
+        return 'Plant and cut…';
       case 'escaped':
-        return 'Juke won. Trailing pursuit still has closing speed.';
+        return 'Ankles broken. Get upfield before pursuit closes.';
       case 'stuffed':
-        return 'Juke stuffed. Fight through contact and pursuit.';
+        return 'He read it. Juke when he closes in at 2–3 yards.';
       case 'down':
         return 'Tackled. The carrier is physically going to ground.';
       default:
@@ -234,67 +252,101 @@ export class YacRun {
 
   private carrierSpeed(isQb: boolean): number {
     const base = isQb ? QB_RUN_SPEED : YAC_SPEED;
-    if (this.state === 'cut') {
-      return this.lastJuke === 'won' ? 5.85 : 4.35;
+    const gathering = (this.state === 'escaped' ||
+      this.state === 'stuffed') && this.jukeT < RECOVER_TIME;
+    if (!gathering) {
+      return base;
     }
-    if (this.state === 'stuffed' && this.jukeT < 0.9) {
-      return 4.65;
+    // Won: a burst out of the cut. Read: stuck in the mud.
+    return this.state === 'escaped' ? base * 1.08 : base * 0.72;
+  }
+
+  /**
+   * Scripted juke footwork. Plant: brake hard on the outside
+   * foot. Cut: velocity snaps sideways off it (no inertia), then
+   * normal steering takes over.
+   */
+  private footwork(wr: PlayerActor, dt: number): void {
+    const f = this.jukeFace;
+    const fx = Math.sin(f);
+    const fz = Math.cos(f);
+    // Lateral unit on the cut side (world +x when dir = 1 and
+    // running upfield).
+    const lx = fz * this.jukeDir;
+    const lz = -fx * this.jukeDir;
+    const total = PLANT_TIME + CUT_TIME;
+    const u = Math.min(1, this.jukeT / total);
+    if (this.state === 'plant') {
+      const keep = Math.max(0, this.jukeEntry * (1 - this.jukeT / PLANT_TIME) * 0.6);
+      wr.footwork(fx * keep, fz * keep, dt, f, 'juke', u, this.jukeDir);
+      return;
     }
-    if (this.state === 'escaped' && this.jukeT < 0.45) {
-      return Math.max(base, 6.25);
-    }
-    return base;
+    const c = Math.min(1, (this.jukeT - PLANT_TIME) / CUT_TIME);
+    const lat = CUT_LATERAL * (1 - c * 0.45);
+    const fwd = CUT_FORWARD + c * 2.2;
+    const vx = lx * lat + fx * fwd;
+    const vz = lz * lat + fz * fwd;
+    const face = Math.atan2(lx * 0.8 + fx, lz * 0.8 + fz);
+    wr.footwork(vx, vz, dt, face, 'juke', u, this.jukeDir);
   }
 
   private updateJuke(): void {
-    const front = this.front;
-    if (this.state !== 'cut' || this.jukeT < JUKE_TIME) {
+    const wr = this.carrier;
+    if (!wr) {
       return;
     }
-    const won = this.lastJuke === 'won';
+    if (this.state === 'plant' && this.jukeT >= PLANT_TIME) {
+      this.jukeWon = this.resolveJuke(wr);
+      this.state = 'cut';
+      if (this.jukeWon && this.front) {
+        this.front.stagger(STAGGER_TIME);
+        this.frontMissT = STAGGER_TIME;
+      }
+      return;
+    }
+    if (this.state !== 'cut' || this.jukeT < PLANT_TIME + CUT_TIME) {
+      return;
+    }
+    const won = this.jukeWon;
+    this.lastJuke = won ? 'won' : 'stuffed';
     this.state = won ? 'escaped' : 'stuffed';
     this.jukeT = 0;
     this.jukeCool = JUKE_COOLDOWN;
-    this.frontMissT = won ? 1.05 : 0.3;
-    if (won) {
-      front?.lockAnim('stumble', 0.78);
+    if (this.front) {
+      this.toast(won ? 'ANKLES BROKEN' : 'JUKE READ', !won);
     }
-    this.toast(won ? 'JUKE WON' : 'JUKE STUFFED', !won);
   }
 
-  private beginJuke(wr: PlayerActor): void {
-    if (this.state !== 'approach') {
-      return;
+  /**
+   * Does the defender bite? Not a coin flip: it takes the
+   * right distance, a defender who is actually closing, a cut
+   * away from his leverage, and some speed into the plant.
+   */
+  private resolveJuke(wr: PlayerActor): boolean {
+    const d = this.front;
+    if (!d) {
+      return true;
     }
-    const direction = this.jukeDirection(wr);
-    const won = Math.random() < JUKE_CHANCE;
-    const width = won ? 2.75 : 1.05;
-    const gain = won ? 2.55 : 1.25;
-    this.lastJuke = won ? 'won' : 'stuffed';
-    this.state = 'cut';
-    this.jukeT = 0;
-    this.jukeTarget = {
-      x: clamp(
-        wr.x + direction * width,
-        -HALF_W + 0.8,
-        HALF_W - 0.8
-      ),
-      z: wr.z + gain
-    };
-    wr.lockAnim('juke', JUKE_TIME);
-    const side = direction < 0 ? 'LEFT' : 'RIGHT';
-    this.toast(`JUKE ${side}`, false);
-  }
-
-  private jukeDirection(wr: PlayerActor): number {
-    if (this.requested !== 0) {
-      return this.requested;
-    }
-    const front = this.front;
-    if (front && Math.abs(front.x - wr.x) > 0.2) {
-      return front.x > wr.x ? -1 : 1;
-    }
-    return wr.x > 0 ? -1 : 1;
+    const dist = xzDist(wr, d);
+    // Sweet spot 1.4–3.2 yd: too close he just wraps you up,
+    // too far he has time to redirect.
+    const timing = dist < 1.4
+      ? clamp((dist - 0.8) / 0.6, 0, 1)
+      : clamp((4.6 - dist) / 1.4, 0, 1);
+    const dv = d.velocity();
+    const tx = (wr.x - d.x) / Math.max(dist, 0.01);
+    const tz = (wr.z - d.z) / Math.max(dist, 0.01);
+    const closing = dv.x * tx + dv.z * tz;
+    const commit = clamp(closing / 5.5, 0, 1);
+    // Where is he relative to the cut? Positive = on the cut side.
+    const f = this.jukeFace;
+    const lx = Math.cos(f) * this.jukeDir;
+    const lz = -Math.sin(f) * this.jukeDir;
+    const side = (d.x - wr.x) * lx + (d.z - wr.z) * lz;
+    const leverage = side > 0.5 ? 0.25 : side < -0.3 ? 1 : 0.7;
+    const sell = clamp(this.jukeEntry / 5, 0.55, 1);
+    const score = timing * (0.3 + 0.7 * commit) * leverage * sell;
+    return score >= 0.42;
   }
 
   private startTackle(wr: PlayerActor, tackler: PlayerActor): void {
@@ -311,13 +363,13 @@ export class YacRun {
 
   private findTackler(wr: PlayerActor): PlayerActor | null {
     const catchBalance = this.yacT < 0.38;
-    if (this.state === 'cut' || catchBalance) {
+    if (catchBalance) {
       return null;
     }
     let tackler: PlayerActor | null = null;
     let distance = TACKLE_RANGE;
     for (const p of this.players) {
-      if (p.def.side !== 'defense' || p.isDown()) {
+      if (p.def.side !== 'defense' || p.isDown() || p.isStaggered()) {
         continue;
       }
       const frontMiss = p === this.front && this.frontMissT > 0;

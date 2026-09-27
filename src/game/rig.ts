@@ -143,7 +143,7 @@ function kindTarget(
     case 'catch':
       return catchPose(t);
     case 'juke':
-      return jukePose(t);
+      return jukePose(t, speed < 0 ? -1 : 1);
     case 'stumble':
       return stumblePose(t);
     case 'tackle':
@@ -503,20 +503,59 @@ function plantPose(t: number): Pose {
 }
 
 /** Ball carrier plants outside the frame and cuts across it. */
-function jukePose(t: number): Pose {
-  const side = Math.sin(Math.min(1, t) * Math.PI);
-  const p = runPose(t * Math.PI * 1.6, {
-    speed: 5,
-    lean: -0.5 * side,
-    accel: -6 * side,
-    plant: side
+/** Share of the juke spent sinking into the plant step. */
+const JUKE_PLANT = 0.36;
+
+/**
+ * Juke in two beats, mirrored by `dir` (the cut side):
+ * plant — sink, jab the outside foot wide, shoulders sell the
+ * other way; cut — push off that foot, hips and chest whip into
+ * the new line, ball tucked high and tight.
+ */
+function jukePose(t: number, dir: number): Pose {
+  const u = Math.min(1, Math.max(0, t));
+  // Push foot is the one opposite the cut.
+  const push = dir > 0 ? 'l' : 'r';
+  const lead = push === 'l' ? 'r' : 'l';
+  const pushSide = push === 'l' ? 1 : -1;
+  if (u < JUKE_PLANT) {
+    const k = Math.sin((u / JUKE_PLANT) * Math.PI * 0.5);
+    const p = runPose(0, { speed: 1.5, lean: 0, accel: -14 * k, plant: k });
+    p.pelvis = [0.3 * k, -dir * 0.18 * k, -dir * 0.28 * k];
+    p.torso = [0.34 * k, -dir * 0.24 * k, -dir * 0.36 * k];
+    p[`${push}Thigh`] = [0.35 * k, 0, pushSide * 0.5 * k];
+    p[`${push}Shin`] = 0.35 + 0.35 * k;
+    p[`${lead}Thigh`] = [0.55 * k, 0, 0];
+    p[`${lead}Shin`] = 0.5 + 0.55 * k;
+    p.lArm = [0.2, 0, -0.55 - 0.3 * k];
+    p.rArm = [-0.48, -0.18, 0.38];
+    p.rFore = 1.72;
+    p.neck = [0.1, -dir * 0.22 * k, 0];
+    p.hop = -0.1 * k;
+    p.shift = -dir * 0.1 * k;
+    return p;
+  }
+  const c = (u - JUKE_PLANT) / (1 - JUKE_PLANT);
+  const whip = Math.sin(Math.min(1, c * 1.4) * Math.PI * 0.5);
+  const ease = 1 - c * 0.55;
+  const p = runPose(c * Math.PI * 2, {
+    speed: 6.5,
+    lean: dir * 0.35 * whip * ease,
+    accel: 8 * (1 - c),
+    plant: 1 - whip
   });
-  p.pelvis[1] += side * 0.18;
-  p.torso[1] += side * -0.22;
+  p.pelvis = [0.26, dir * 0.24 * whip, dir * 0.42 * whip * ease];
+  p.torso = [0.3, dir * 0.3 * whip, dir * 0.5 * whip * ease];
+  p[`${push}Thigh`] = [-0.55 * whip, 0, pushSide * 0.35 * ease];
+  p[`${push}Shin`] = 0.15;
+  p[`${lead}Thigh`] = [0.75 * whip, 0, -pushSide * 0.2];
+  p[`${lead}Shin`] = 0.85;
+  p.lArm = [-0.3, 0, -0.7 * ease];
   p.rArm = [-0.48, -0.18, 0.38];
   p.rFore = 1.72;
-  p.neck = [p.neck[0], p.neck[1] + side * 0.18, p.neck[2]];
-  p.hop = groundHop(p);
+  p.neck = [0.06, dir * 0.28 * whip, 0];
+  p.hop = 0.03;
+  p.shift = dir * 0.08 * whip * ease;
   return p;
 }
 

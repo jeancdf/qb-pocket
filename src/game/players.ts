@@ -56,6 +56,8 @@ export class PlayerActor {
   cover: CoverGrade = 'idle';
   private vx = 0;
   private vz = 0;
+  /** Juked: momentum carries him on, no steering until it ends. */
+  private staggerT = 0;
   private idx = 0;
   private wait = 0;
   private gait = 0;
@@ -111,6 +113,7 @@ export class PlayerActor {
     this.facing = this.def.heading;
     this.vx = 0;
     this.vz = 0;
+    this.staggerT = 0;
     this.idx = 0;
     this.wait = 0;
     this.gait = 0;
@@ -319,6 +322,10 @@ export class PlayerActor {
 
   /** Break off the playbook route and run to a spot. */
   chase(to: Vec2, dt: number, speed: number): void {
+    if (this.staggerT > 0) {
+      this.drift(dt);
+      return;
+    }
     this.chasing = true;
     this.dropping = false;
     this.wait = 0;
@@ -356,6 +363,57 @@ export class PlayerActor {
       }
     }
     this.sync();
+  }
+
+  /**
+   * Beaten by a juke: he keeps sliding on his old line, legs
+   * buckling, and cannot turn back for `seconds`.
+   */
+  stagger(seconds: number): void {
+    this.staggerT = Math.max(this.staggerT, seconds);
+    this.lockAnim('stumble', seconds);
+  }
+
+  isStaggered(): boolean {
+    return this.staggerT > 0;
+  }
+
+  private drift(dt: number): void {
+    this.staggerT = Math.max(0, this.staggerT - dt);
+    const k = Math.exp(-dt * 2.4);
+    this.vx *= k;
+    this.vz *= k;
+    this.x += this.vx * dt;
+    this.z += this.vz * dt;
+    if (!this.tickHold(dt)) {
+      this.pumpRun(dt, Math.hypot(this.vx, this.vz));
+    }
+    this.sync();
+  }
+
+  /**
+   * Scripted footwork (the juke): velocity is set outright, not
+   * accelerated, so the plant and the cut are sharp. The caller
+   * picks the pose; `dir` mirrors it.
+   */
+  footwork(
+    vx: number,
+    vz: number,
+    dt: number,
+    face: number,
+    kind: AnimKind,
+    u: number,
+    dir: number
+  ): void {
+    this.chasing = true;
+    this.holdKind = null;
+    this.vx = vx;
+    this.vz = vz;
+    this.x += vx * dt;
+    this.z += vz * dt;
+    this.facing = headingLerp(this.facing, face, 16 * dt);
+    this.sync();
+    poseRig(this.rig, kind, u, dir);
   }
 
   /** Run straight upfield after the catch. */
