@@ -47,6 +47,7 @@ import {
   type ThrowSituation,
   type ThrowTarget
 } from './throwing';
+import { advancePoseClock } from './pose-blend';
 import type { CoverGrade, Phase, Vec2 } from './types';
 
 const RECEIVER_YAC_TIME = 5.2;
@@ -371,6 +372,7 @@ export class FootballGame {
   }
 
   update(dt: number): void {
+    advancePoseClock(dt);
     const live = this.phase === 'play' || this.phase === 'throw';
     if (live) {
       this.clock += dt;

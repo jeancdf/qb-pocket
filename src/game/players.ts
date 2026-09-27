@@ -11,6 +11,7 @@ import {
   type AnimKind,
   type PlayerRig
 } from './rig';
+import { snapPose } from './pose-blend';
 import type { CoverGrade, PlayerDef, Pos, RoutePoint, Vec2 } from './types';
 
 const RING_COL: Record<CoverGrade, number> = {
@@ -56,6 +57,8 @@ export class PlayerActor {
   private holdLeft = 0;
   private holdDur = 0.4;
   private bodyLean = 0;
+  private dropping = false;
+  private dropPeak = 0;
   private ragdollT = -1;
   private fallVx = 0;
   private fallVz = 0;
@@ -104,11 +107,14 @@ export class PlayerActor {
     this.holdKind = null;
     this.holdLeft = 0;
     this.bodyLean = 0;
+    this.dropping = false;
+    this.dropPeak = 0;
     this.ragdollT = -1;
     this.fallVx = 0;
     this.fallVz = 0;
     this.cover = 'idle';
     this.setCover('idle');
+    snapPose(this.rig);
     this.setAnim('idle', 0, 0);
     this.sync();
   }
@@ -147,6 +153,7 @@ export class PlayerActor {
 
   /** Hold a throw/catch pose for a beat, then resume. */
   lockAnim(kind: AnimKind, seconds: number): void {
+    this.dropping = false;
     this.holdKind = kind;
     this.holdDur = seconds;
     this.holdLeft = seconds;
@@ -210,12 +217,23 @@ export class PlayerActor {
     }
     const speed =
       Math.hypot(this.x - ox, this.z - oz) / Math.max(dt, 1e-4);
+    const vz = (this.z - oz) / Math.max(dt, 1e-4);
+    if (this.isDropping(live, vz)) {
+      // Backpedal: eyes stay downfield instead of turning around.
+      this.facing = of;
+      this.dropping = true;
+    }
     const turn = Math.abs(wrapPi(this.facing - of));
     if (turn > 0.25) {
       this.plant = Math.max(this.plant, 0.1);
     }
     this.sync();
     this.driveAnim(dt, live, speed);
+  }
+
+  /** QB retreating from the line faces upfield while he drops. */
+  private isDropping(live: boolean, vz: number): boolean {
+    return this.def.pos === 'QB' && live && vz < -0.05;
   }
 
   private follow(dt: number): void {
@@ -266,6 +284,7 @@ export class PlayerActor {
   /** Break off the playbook route and run to a spot. */
   chase(to: Vec2, dt: number, speed: number): void {
     this.chasing = true;
+    this.dropping = false;
     this.wait = 0;
     this.steer(to, dt, speed, false);
     if (!this.tickHold(dt)) {
@@ -369,6 +388,20 @@ export class PlayerActor {
     if (this.shouldHitch(live, speed)) {
       applyHitch(this.rig);
       this.lookToQb();
+      return;
+    }
+    if (pos === 'QB' && this.dropping) {
+      this.dropPeak = Math.max(this.dropPeak, speed);
+      if (live && (speed > 0.6 || (this.dropPeak < 1.5 && speed > 0.05))) {
+        this.gait += dt * Math.max(speed, 1) * 3;
+        poseRig(this.rig, 'dropback', this.gait, speed);
+        return;
+      }
+      // Last step of the drop: plant the back foot, then set.
+      this.dropPeak = 0;
+      this.gait = 0;
+      this.lockAnim('plant', 0.3);
+      this.tickHold(dt);
       return;
     }
     if (pos === 'QB' && (!live || speed < 1.5)) {

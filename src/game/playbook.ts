@@ -24,7 +24,9 @@ export const SMASH: PlayerDef[] = [
     pos: 'QB',
     side: 'offense',
     start: { x: 0.25, z: L - 5.1 },
-    heading: 0
+    heading: 0,
+    // Two quick gun drop steps, then plant and set in the pocket.
+    route: [{ x: 0.25, z: L - 6.6, speed: 4.4, wait: 0.05 }]
   },
   {
     id: 'rb',
