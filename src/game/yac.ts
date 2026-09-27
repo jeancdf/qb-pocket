@@ -280,7 +280,7 @@ export class YacRun {
     let tackler: PlayerActor | null = null;
     let distance = TACKLE_RANGE;
     for (const p of this.players) {
-      if (!isCoverage(p.def.pos)) {
+      if (p.def.side !== 'defense' || p.isDown()) {
         continue;
       }
       const frontMiss = p === this.front && this.frontMissT > 0;

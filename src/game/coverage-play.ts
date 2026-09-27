@@ -21,6 +21,7 @@ import {
 import { isPassRusher } from './line-play';
 import { clamp, lerp, xzDist } from './math';
 import type { PlayerActor } from './players';
+import { interceptPoint } from './pursuit';
 import type { EyeRead, QbEyes } from './qb-eyes';
 import type { Pos, Vec2 } from './types';
 
@@ -347,7 +348,6 @@ export class CoverPlay {
 
   /** After the catch, DBs/LBs run to the ball carrier. */
   chaseCarrier(dt: number, wr: PlayerActor): void {
-    const to = { x: wr.x, z: wr.z };
     for (const job of this.jobs) {
       if (isPassRusher(job.id)) {
         continue;
@@ -356,7 +356,9 @@ export class CoverPlay {
       if (!db) {
         continue;
       }
-      db.chase(to, dt, this.pursuitSpeed(job));
+      // Take an angle: run to where the carrier is going.
+      const speed = this.pursuitSpeed(job);
+      db.chase(interceptPoint(db, wr, speed), dt, speed);
     }
   }
 

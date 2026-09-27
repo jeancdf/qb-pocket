@@ -17,6 +17,7 @@
 import { LOS_Z } from './constants';
 import { clamp, lerp, xzDist } from './math';
 import type { PlayerActor } from './players';
+import { interceptPoint } from './pursuit';
 import type { Vec2 } from './types';
 
 const HOP_T = 0.15;
@@ -25,9 +26,17 @@ const ENGAGE = 1.35;
 const PAD = 1.16;
 const MAX_SET = 2.2;
 const FIGHT = 0.15;
-const EDGE_RUSH = 3.85;
-const LB_RUSH = 4.35;
+/** Free-rusher top speeds, close to everyone else on the field. */
+const EDGE_RUSH = 5.3;
+const DT_RUSH = 4.9;
+const LB_RUSH = 5.5;
+const S_RUSH = 5.8;
 const SPY_SPD = 2.45;
+/** After a shed, the rusher rips past his blocker for this long. */
+const RIP_T = 0.3;
+/** Pursuit speed for DL / blitzers once the QB is a runner. */
+const CHASE_DL = 5.2;
+const CHASE_LB = 5.9;
 
 /** Ids CoverPlay skips so rushers are not also dropping. */
 const rushing = new Set<string>();
@@ -60,6 +69,17 @@ interface Match {
   contain: Vec2;
   locked: boolean;
   contained: boolean;
+  /** Snap time at which the DL beats his man (Infinity = never). */
+  shedAt: number;
+}
+
+interface Rush {
+  p: PlayerActor;
+  /** Snap time he is free to go. */
+  from: number;
+  speed: number;
+  /** Blocker he just beat (rip around him first). */
+  beat?: PlayerActor;
 }
 
 const SPECS: Spec[] = [
@@ -73,7 +93,7 @@ export class LinePlay {
   private readonly byId: Map<string, PlayerActor>;
   private readonly matches: Match[] = [];
   private readonly center?: PlayerActor;
-  private readonly rushers: PlayerActor[] = [];
+  private readonly rushers: Rush[] = [];
   private helpDl?: PlayerActor;
   private t = 0;
   private losZ = LOS_Z;
@@ -129,6 +149,7 @@ export class LinePlay {
     if (left > 0) {
       this.hop(Math.min(dt, left));
     }
+    this.shedBlocks();
     this.rushQb(dt, qb);
     this.spyMike(dt, qb);
     if (this.t < HOP_T) {
@@ -147,69 +168,107 @@ export class LinePlay {
   }
 
   /**
-   * Every play: one edge (lde/rde) plus the Mike on about
-   * half of snaps. Always a DE so game.ts sack range still
-   * hits without spawning new actors.
+   * Every snap the DL fight their blockers; each one gets a
+   * random moment where he wins (or never does). The featured
+   * edge wins more often, a DT sometimes beats the guard late.
+   * Blitzers (LB/S) come free, with a random read delay.
    */
   private pickRushers(): void {
     rushing.clear();
     this.rushers.length = 0;
     const edge = Math.random() < 0.5 ? 'lde' : 'rde';
-    this.addRusher(edge);
-    if (this.blitz) {
-      for (const id of this.blitz) {
-        this.addRusher(id);
-      }
-      return;
+    const dt = Math.random() < 0.5 ? 'ldt' : 'rdt';
+    for (const m of this.matches) {
+      const id = m.dl.def.id;
+      m.shedAt = id === edge ? edgeShed()
+        : id === dt ? interiorShed()
+        : Number.POSITIVE_INFINITY;
     }
-    if (Math.random() < 0.55) {
-      this.addRusher('mlb');
+    const blitz = this.blitz ??
+      (Math.random() < 0.55 ? ['mlb'] : []);
+    for (const id of blitz) {
+      const delay = 0.05 + Math.random() * 0.35;
+      this.addRusher(id, delay);
     }
   }
 
-  private addRusher(id: string): void {
+  private addRusher(
+    id: string,
+    from: number,
+    beat?: PlayerActor
+  ): void {
     const p = this.byId.get(id);
-    if (!p) {
+    if (!p || rushing.has(id)) {
       return;
     }
     rushing.add(id);
-    this.rushers.push(p);
+    const base = p.def.pos === 'S' ? S_RUSH
+      : p.def.pos === 'LB' ? LB_RUSH
+      : p.def.start.x * p.def.start.x > 16 ? EDGE_RUSH : DT_RUSH;
+    const speed = base * (0.93 + Math.random() * 0.12);
+    this.rushers.push({ p, from, speed, beat });
   }
 
-  /** Unblocked edge / blitzing Mike: contain a beat, then QB. */
-  private rushQb(dt: number, qb: PlayerActor): void {
-    for (const p of this.rushers) {
-      this.rushAtQb(p, dt, qb);
+  /** DL whose moment has come shed the block and go. */
+  private shedBlocks(): void {
+    for (const m of this.matches) {
+      if (this.t < m.shedAt || rushing.has(m.dl.def.id)) {
+        continue;
+      }
+      m.locked = false;
+      this.addRusher(m.dl.def.id, this.t, m.ol);
     }
   }
 
-  private rushAtQb(
-    p: PlayerActor,
-    dt: number,
-    qb: PlayerActor
-  ): void {
-    const edge = p.def.pos === 'DL';
-    if (this.t < HOP_T && edge) {
+  /** Free rushers: rip past the blocker / hit the gap, then QB. */
+  private rushQb(dt: number, qb: PlayerActor): void {
+    for (const r of this.rushers) {
+      this.rushAtQb(r, dt, qb);
+    }
+  }
+
+  private rushAtQb(r: Rush, dt: number, qb: PlayerActor): void {
+    const p = r.p;
+    if (this.t < r.from) {
       this.poseRush(p, qb);
       return;
     }
-    const spd = edge ? EDGE_RUSH
-      : p.def.pos === 'S' ? LB_RUSH + 0.35 : LB_RUSH;
-    if (this.t < 0.42) {
-      seek(p, this.gate(p, edge), spd, dt);
+    const since = this.t - r.from;
+    if (r.beat && since < RIP_T) {
+      seek(p, rip(p, r.beat), r.speed, dt);
+    } else if (!r.beat && since < 0.38) {
+      seek(p, { x: p.x * 0.35, z: p.z - 1.35 }, r.speed, dt);
     } else {
-      seek(p, qb, spd, dt);
+      seek(p, interceptPoint(p, qb, r.speed), r.speed, dt);
     }
     this.poseRush(p, qb);
   }
 
-  /** Outside flatten for DE; A-gap shoot for the Mike. */
-  private gate(p: PlayerActor, edge: boolean): Vec2 {
-    const out = Math.sign(p.def.start.x) || 1;
-    if (edge) {
-      return { x: p.x + out * 1.05, z: p.z - 0.85 };
+  /**
+   * QB crossed the line: every defender up front turns and runs
+   * to where he will be, not where he is.
+   */
+  pursue(dt: number, carrier: PlayerActor): void {
+    for (const m of this.matches) {
+      this.chaseRunner(m.dl, carrier, CHASE_DL, dt);
     }
-    return { x: p.x * 0.35, z: p.z - 1.35 };
+    for (const r of this.rushers) {
+      if (r.p.def.pos !== 'DL') {
+        this.chaseRunner(r.p, carrier, CHASE_LB, dt);
+      }
+    }
+  }
+
+  private chaseRunner(
+    p: PlayerActor,
+    carrier: PlayerActor,
+    speed: number,
+    dt: number
+  ): void {
+    if (p.isDown()) {
+      return;
+    }
+    p.chase(interceptPoint(p, carrier, speed), dt, speed);
   }
 
   private poseRush(p: PlayerActor, qb: PlayerActor): void {
@@ -253,7 +312,8 @@ export class LinePlay {
       wig: 0,
       contain: { x: s.cx, z: cz },
       locked: false,
-      contained: false
+      contained: false,
+      shedAt: Number.POSITIVE_INFINITY
     });
   }
 
@@ -287,6 +347,14 @@ export class LinePlay {
     const rg = this.byId.get('rg');
     if (!ldt || !rdt || !lg || !rg) {
       this.helpDl = undefined;
+      return;
+    }
+    if (isPassRusher('ldt') || isPassRusher('rdt')) {
+      // A DT already beat his man: the center stays home.
+      this.helpDl = isPassRusher('ldt') ? rdt : ldt;
+      if (isPassRusher(this.helpDl.def.id)) {
+        this.helpDl = undefined;
+      }
       return;
     }
     const l = winScore(lg, ldt, qb);
@@ -480,6 +548,33 @@ function poseMatch(m: Match, t: number): void {
   const kind = m.locked ? 'engage' : undefined;
   m.ol.setAnim(kind ?? 'passSet', t, 2);
   m.dl.setAnim(kind ?? 'rush', t, 4);
+}
+
+/** Around the beaten blocker's outside (or inside) shoulder. */
+function rip(p: PlayerActor, ol: PlayerActor): Vec2 {
+  const side = Math.sign(p.x - ol.x) || Math.sign(ol.def.start.x) || 1;
+  return { x: ol.x + side * 0.95, z: ol.z - 0.9 };
+}
+
+/** Edge vs tackle: quick win, late win, or held (then a late shed). */
+function edgeShed(): number {
+  const r = Math.random();
+  if (r < 0.28) {
+    return 0.7 + Math.random() * 0.7;
+  }
+  if (r < 0.68) {
+    return 1.6 + Math.random() * 1.6;
+  }
+  return 4.2 + Math.random() * 2.4;
+}
+
+/** DT vs guard: mostly held, sometimes a late push through. */
+function interiorShed(): number {
+  const r = Math.random();
+  if (r < 0.3) {
+    return 2.2 + Math.random() * 1.8;
+  }
+  return 5 + Math.random() * 3;
 }
 
 function seek(

@@ -691,6 +691,7 @@ export class FootballGame {
       this.cover.breakOn(dt, this.flight.aim);
     } else if (this.phase === 'yac' && carrier && !this.yac.tackler) {
       this.cover.chaseCarrier(dt, carrier);
+      this.line.pursue(dt, carrier);
     }
   }
 
