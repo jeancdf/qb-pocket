@@ -17,6 +17,7 @@ import {
 import { CoverPlay, isCoverage, nearestEligible } from './coverage-play';
 import { separatePlayers } from './collisions';
 import { Drive } from './drive';
+import { GetOpen } from './get-open';
 import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
 import { isPassRusher, LinePlay, passRushers } from './line-play';
@@ -29,6 +30,7 @@ import { PLAYS, type OffPlay } from './plays';
 import { handPos, PlayerActor } from './players';
 import { advancePoseClock } from './pose-blend';
 import { QbEyes } from './qb-eyes';
+import { fitRoute } from './route-bounds';
 import { gradeReceiver } from './receiver-grade';
 import {
   addLights,
@@ -102,6 +104,7 @@ export class FootballGame {
   private readonly aimMark: AimMark;
   private readonly ghosts: RouteGhosts;
   private readonly yac: YacRun;
+  private readonly open = new GetOpen();
   private readonly flight = new PassFlight();
   private flightPeak = 0;
   private whistleT = 0;
@@ -696,6 +699,10 @@ export class FootballGame {
           continue;
         }
       }
+      if (live && this.open.wants(p)) {
+        this.workOpen(p, dt);
+        continue;
+      }
       if (db && (live || this.phase === 'yac')) {
         continue;
       }
@@ -745,6 +752,7 @@ export class FootballGame {
     this.clock = 0;
     this.whistleT = 0;
     this.yac.clear();
+    this.open.clear();
     this.flight.clear();
     this.aimMark.hide();
     this.aimMark.style(1, false);
@@ -960,8 +968,24 @@ export class FootballGame {
       if (!p || !pack) {
         continue;
       }
-      p.setSkill(pack.start, pack.route, pack.routeName);
+      p.setSkill(
+        pack.start,
+        fitRoute(pack.route, this.drive.losZ),
+        pack.routeName
+      );
     }
+  }
+
+  /** Route is over: find grass away from the coverage. */
+  private workOpen(p: PlayerActor, dt: number): void {
+    const scrambling = this.phase === 'play' && this.scrambling();
+    this.open.move(p, dt, {
+      qb: this.qb(),
+      losZ: this.drive.losZ,
+      defenders: this.defenders(),
+      mates: this.eligibles(),
+      scramble: scrambling ? Math.sign(this.stickX) : 0
+    });
   }
 
   private applyDefense(): void {
@@ -1002,7 +1026,7 @@ export class FootballGame {
     const shift = this.drive.losZ - LOS_Z;
     const local = { x: wr.x, z: wr.z - shift };
     const pack = play.skill[play.motionId];
-    const rest = pack?.route ?? wr.def.route ?? [];
+    const rest = fitRoute(pack?.route ?? wr.def.route ?? [], this.drive.losZ);
     wr.setSkill(local, [local, ...rest], pack?.routeName ?? 'Motion');
     this.rebuildGhosts();
   }

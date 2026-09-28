@@ -315,6 +315,12 @@ export class PlayerActor {
     }
   }
 
+  /** Ran the last point of his route (or has none). */
+  routeDone(): boolean {
+    const route = this.def.route;
+    return this.offRoute || !route || this.idx >= route.length;
+  }
+
   /** Stop following the playbook; update() then coasts to a stop. */
   leaveRoute(): void {
     this.offRoute = true;
