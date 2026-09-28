@@ -67,6 +67,8 @@ export class PassFlight {
   private t = 0;
   private tipT = 0;
   private tipped = false;
+  /** Tipped ball already had its second chance: nobody touches it. */
+  private deadBall = false;
   private closest: number | null = null;
   private wrHandsOff = false;
   private incompMsg = 'INCOMPLETE';
@@ -81,6 +83,7 @@ export class PassFlight {
     this.t = 0;
     this.tipT = 0;
     this.tipped = false;
+    this.deadBall = false;
     this.closest = null;
     this.wrHandsOff = false;
     this.incompMsg = 'INCOMPLETE';
@@ -125,6 +128,9 @@ export class PassFlight {
       this.tipT -= dt;
       return FLYING;
     }
+    if (this.deadBall) {
+      return FLYING;
+    }
     this.planDives(ball, eligibles, players, qb);
     const leaping = [...this.divers.values()].some((d) => d.kind === 'leap');
     const top = CATCH_HEIGHT_MAX + (leaping ? LEAP_HEIGHT : 0);
@@ -158,17 +164,23 @@ export class PassFlight {
     if (!outcome) {
       return FLYING;
     }
+    if (this.tipped && (outcome === 'breakup' || outcome === 'drop')) {
+      // One touch only: a deflection that isn't secured right
+      // away falls dead. No pinball.
+      this.deadBall = true;
+      return FLYING;
+    }
     if (outcome === 'pick' && db) {
       return { kind: 'pick', db };
     }
     if (outcome === 'breakup') {
-      this.tip(ball, 3.4, 'BROKEN UP');
+      this.tip(ball, 1.1, 'BROKEN UP');
       db?.lockAnim('catch', 0.3);
       return { kind: 'tipped', msg: 'BROKEN UP' };
     }
     if (outcome === 'drop') {
       this.wrHandsOff = true;
-      this.tip(ball, 1.8, 'DROPPED');
+      this.tip(ball, 0.8, 'DROPPED');
       wr?.lockAnim('stumble', 0.5);
       return { kind: 'tipped', msg: 'DROPPED' };
     }
@@ -391,10 +403,12 @@ export class PassFlight {
 
   /** Ball pops off hands: it stays live but wild. */
   private tip(ball: Football, up: number, msg: string): void {
+    // Most of the ball's energy dies on the hands: a short pop
+    // and it drops, the way a deflection really falls.
     const v = ball.vel;
-    v.x = v.x * -0.2 + (Math.random() - 0.5) * 3;
-    v.z = v.z * 0.15 + (Math.random() - 0.5) * 3;
-    v.y = up + Math.random() * 1.2;
+    v.x = v.x * 0.12 + (Math.random() - 0.5) * 2;
+    v.z = v.z * 0.12 + (Math.random() - 0.5) * 2;
+    v.y = up + Math.random() * 0.6;
     this.tipped = true;
     this.closest = null;
     this.tipT = TIP_COOLDOWN;

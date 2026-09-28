@@ -150,13 +150,18 @@ export function contest(
     return null;
   }
   const r = rng();
-  if (dbInPlay && (wr === null || db! + 0.25 < wr)) {
+  if (dbInPlay && (wr === null || db! + (c.dbStretch ? 0.5 : 0.25) < wr)) {
     // Defender beat the receiver to it.
     let pick = 0.34 + (1 - c.power) * 0.22;
     if (c.tipped) {
       pick += 0.18;
     }
     pick *= clamp(1.35 - db! * 0.5, 0.4, 1);
+    if (!c.tipped && wr !== null && r > 0.55) {
+      // A receiver right there still fights for it.
+      const hands = 0.8 - clamp(wr / CATCH_RADIUS, 0, 1) * 0.3;
+      return rng() < hands ? 'catch' : 'breakup';
+    }
     if (c.dbStretch) {
       // Fingertips at full extension: mostly a knockdown.
       pick *= 0.45;
@@ -173,10 +178,14 @@ export function contest(
   if (c.tipped) {
     hands -= 0.3;
   }
-  if (dbInPlay || c.sep < 1.4) {
-    // Contested: DB swipes at the hands.
-    const closeness = clamp(1.4 - c.sep, 0, 1.4) / 1.4;
-    const swat = 0.18 + closeness * 0.42;
+  if (dbInPlay || c.sep < 1) {
+    // Contested: DB swipes at the hands. Tight coverage wins
+    // some, but most balls on the hands are still caught.
+    const closeness = clamp(1 - c.sep, 0, 1);
+    let swat = 0.06 + closeness * 0.22;
+    if (c.dbStretch) {
+      swat *= 0.6;
+    }
     if (r < swat * 0.22) {
       return 'pick';
     }
