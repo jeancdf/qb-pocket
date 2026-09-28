@@ -202,6 +202,12 @@ export interface RunDrive {
   accel: number;
   /** 0–1 while a foot is planted for a hard cut. */
   plant: number;
+  /**
+   * 0–1 how hard the feet are working (accelerating, braking or
+   * bending the path). The runner sinks his hips and bends his knees
+   * to lower his centre of gravity, then stands tall at cruise.
+   */
+  crouch?: number;
 }
 
 export function applyRun(
@@ -282,10 +288,14 @@ function runPose(phase: number, d: RunDrive): Pose {
   const push = Math.max(0, drive);
   const brake = Math.max(0, -drive);
   const pl = clamp01(d.plant);
-  const pelvisX = 0.05 + 0.08 * k + 0.16 * push - 0.14 * brake + 0.12 * pl;
-  const torsoX = 0.05 + 0.1 * k + 0.24 * push - 0.12 * brake + 0.14 * pl;
-  const reach = (0.05 + 0.3 * k) * (1 - 0.3 * brake);
-  const amp = (0.27 + 0.53 * k) * (1 - 0.45 * pl) * (1 - 0.3 * brake);
+  const low = clamp01(d.crouch ?? 0);
+  const pelvisX =
+    0.05 + 0.08 * k + 0.16 * push - 0.14 * brake + 0.12 * pl + 0.14 * low;
+  const torsoX =
+    0.05 + 0.1 * k + 0.24 * push - 0.12 * brake + 0.14 * pl + 0.16 * low;
+  const reach = (0.05 + 0.3 * k) * (1 - 0.3 * brake) + 0.35 * low;
+  const amp =
+    (0.27 + 0.53 * k) * (1 - 0.45 * pl) * (1 - 0.3 * brake) * (1 - 0.2 * low);
   const leg = (f: number) => {
     const w = wrapAngle(f);
     // Knee drive peaks early, then the leg paws back so the foot
@@ -301,7 +311,8 @@ function runPose(phase: number, d: RunDrive): Pose {
       hip: pelvisX + reach + 0.2 * pl + amp * drive,
       knee:
         0.2 + (0.45 + 1.3 * k) * fold * (1 - 0.35 * pl) +
-        (0.2 + 0.15 * k) * load + 0.45 * pl + 0.2 * brake,
+        (0.2 + 0.15 * k + 0.45 * low) * load +
+        0.45 * pl + 0.2 * brake + 0.55 * low,
       foot:
         0.55 * k * Math.pow(Math.max(0, -Math.sin(w)), 2) -
         0.15 * Math.max(0, Math.sin(w))

@@ -70,6 +70,8 @@ export class PlayerActor {
   private holdDur = 0.4;
   private bodyLean = 0;
   private runAccel = 0;
+  private runTurn = 0;
+  private crouch = 0;
   private cutLean = 0;
   private dropping = false;
   private dropPeak = 0;
@@ -124,6 +126,8 @@ export class PlayerActor {
     this.holdLeft = 0;
     this.bodyLean = 0;
     this.runAccel = 0;
+    this.runTurn = 0;
+    this.crouch = 0;
     this.cutLean = 0;
     this.dropping = false;
     this.dropPeak = 0;
@@ -612,6 +616,7 @@ export class PlayerActor {
     const speed = Math.hypot(this.vx, this.vz);
     const braking = speed > 1e-3 ? -decel : 0;
     this.runAccel += (braking - this.runAccel) * Math.min(1, dt * 8);
+    this.runTurn *= Math.max(0, 1 - dt * 8);
     if (speed < 1e-3) {
       this.vx = 0;
       this.vz = 0;
@@ -640,11 +645,20 @@ export class PlayerActor {
     const hz = (0.85 + 0.16 * speed) * (1 - 0.35 * plant);
     this.gait += dt * hz * Math.PI * 2;
     this.cutLean *= Math.max(0, 1 - dt * 6);
+    // Get low when the feet work hard: driving, braking or bending the
+    // path (lateral yd/s²). Drop fast, rise back slowly at cruise.
+    const effort = Math.min(
+      1,
+      Math.hypot(this.runAccel / 10, this.runTurn / 11) + plant
+    );
+    const rate = effort > this.crouch ? 9 : 2.5;
+    this.crouch += (effort - this.crouch) * Math.min(1, dt * rate);
     applyRun(this.rig, this.gait, {
       speed,
       lean: this.bodyLean + this.cutLean * plant,
       accel: this.runAccel,
-      plant
+      plant,
+      crouch: this.crouch
     });
   }
 
@@ -684,6 +698,8 @@ export class PlayerActor {
     this.vx += fx * along - fz * across;
     this.vz += fz * along + fx * across;
     this.runAccel += (along / Math.max(dt, 1e-4) - this.runAccel) *
+      Math.min(1, dt * 8);
+    this.runTurn += (Math.abs(across) / Math.max(dt, 1e-4) - this.runTurn) *
       Math.min(1, dt * 8);
     const turnErr = wrapPi(desired - heading);
     const err = Math.abs(turnErr);
