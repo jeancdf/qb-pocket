@@ -17,18 +17,20 @@ const SPRINT_BOOST = 1.18;
 const SPRINT_TANK = 2.4;
 const SPRINT_REFILL = 0.5;
 /** Pause between two jukes. */
-const JUKE_COOLDOWN = 0.9;
+const JUKE_COOLDOWN = 0.4;
 const TACKLE_SETTLE_TIME = 1.65;
 /** Defender must be this close for a juke to have a victim. */
 const JUKE_RANGE = 4.8;
 /** Plant: sink and brake on the outside foot. */
-const PLANT_TIME = 0.16;
+const PLANT_TIME = 0.05;
 /** Cut: explode sideways off that foot. */
-const CUT_TIME = 0.3;
+const CUT_TIME = 0.24;
+/** How long an early press is remembered. */
+const JUKE_BUFFER = 0.3;
 const CUT_LATERAL = 7.2;
 const CUT_FORWARD = 2.4;
 /** After the cut: legs gather, top speed comes back. */
-const RECOVER_TIME = 0.35;
+const RECOVER_TIME = 0.25;
 /** A beaten defender slides past for this long. */
 const STAGGER_TIME = 0.8;
 
@@ -63,6 +65,8 @@ export class YacRun {
   private tackleT = 0;
   private frontMissT = 0;
   private jukeCool = 0;
+  /** A press that came in during cooldown, replayed when ready. */
+  private queued: { dir: number; t: number } | null = null;
   /** Sprint fuel in seconds. */
   sprintLeft = SPRINT_TANK;
 
@@ -84,6 +88,7 @@ export class YacRun {
     this.tackleT = 0;
     this.frontMissT = 0;
     this.jukeCool = 0;
+    this.queued = null;
     this.sprintLeft = SPRINT_TANK;
     this.dives.clear();
   }
@@ -116,13 +121,16 @@ export class YacRun {
    */
   requestJuke(direction: number): void {
     const wr = this.carrier;
-    if (!wr || wr.isDown() || this.jukeCool > 0) {
+    if (!wr || wr.isDown() || this.state === 'down') {
       return;
     }
-    if (this.state === 'plant' || this.state === 'cut' ||
-        this.state === 'down') {
+    if (this.jukeCool > 0 || this.state === 'plant' ||
+        this.state === 'cut') {
+      // Pressed a hair early: fire it the moment it's allowed.
+      this.queued = { dir: direction, t: JUKE_BUFFER };
       return;
     }
+    this.queued = null;
     const front = this.nearestDefender(wr);
     this.front = front && xzDist(front, wr) <= JUKE_RANGE ? front : null;
     let dir = direction === 0 ? 0 : direction < 0 ? -1 : 1;
@@ -217,6 +225,15 @@ export class YacRun {
     this.yacT += dt;
     this.jukeT += dt;
     this.jukeCool = Math.max(0, this.jukeCool - dt);
+    if (this.queued) {
+      this.queued.t -= dt;
+      if (this.queued.t <= 0) {
+        this.queued = null;
+      } else if (this.jukeCool <= 0 && this.state !== 'plant' &&
+          this.state !== 'cut') {
+        this.requestJuke(this.queued.dir);
+      }
+    }
     this.frontMissT = Math.max(0, this.frontMissT - dt);
     if (wr.isDown()) {
       this.tackleT += dt;

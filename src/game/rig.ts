@@ -586,7 +586,7 @@ function plantPose(t: number): Pose {
 
 /** Ball carrier plants outside the frame and cuts across it. */
 /** Share of the juke spent sinking into the plant step. */
-const JUKE_PLANT = 0.36;
+const JUKE_PLANT = 0.17;
 
 /**
  * Juke in two beats, mirrored by `dir` (the cut side):
