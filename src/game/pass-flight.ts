@@ -153,7 +153,13 @@ export class PassFlight {
     if (!this.atClosest(ball, toWr, toDb)) {
       return FLYING;
     }
-    const wrDive = wr ? this.divers.get(wr)?.kind === 'dive' : false;
+    // Only a catch that really needed the layout ends the play
+    // on the grass; one he'd have made on his feet is a normal
+    // catch and he keeps running.
+    const wrDive = wr
+      ? this.divers.get(wr)?.kind === 'dive' &&
+        xzDist(wr, ball.pos) > CATCH_RADIUS
+      : false;
     const outcome = contest({
       ballSpeed: ball.vel.length(),
       wrDist: toWr,
@@ -288,6 +294,7 @@ export class PassFlight {
     const stand = wr ? CATCH_RADIUS : DB_REACH;
     const far = wr ? WR_DIVE_REACH : DB_DIVE_REACH;
     let best: { t: number; d: number; y: number; x: number; z: number } | null = null;
+    const v = p.velocity();
     for (let t = 0.02; t <= DIVE_LOOK; t += 0.02) {
       const y = ball.pos.y + ball.vel.y * t - 0.5 * GRAVITY * t * t;
       if (y < CATCH_HEIGHT_MIN) {
@@ -298,7 +305,9 @@ export class PassFlight {
       }
       const x = ball.pos.x + ball.vel.x * t;
       const z = ball.pos.z + ball.vel.z * t;
-      const d = Math.hypot(x - p.x, z - p.z);
+      // Where he'll be by then at his current run, so a player
+      // already arriving under it doesn't throw himself at it.
+      const d = Math.hypot(x - (p.x + v.x * t), z - (p.z + v.z * t));
       if (!best || d < best.d) {
         best = { t, d, y, x, z };
       }
