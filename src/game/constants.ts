@@ -25,7 +25,7 @@ export const WINDOW_YARDS = 2.7;
 /** Rusher-to-QB distance that counts as contact (bodies touching). */
 export const SACK_RANGE = 0.85;
 /** After-catch pace — pads, not an arcade sprint. */
-export const YAC_SPEED = 5.7;
+export const YAC_SPEED = 6.0;
 export const YAC_TIME = 2.85;
 export const TACKLE_RANGE = 1.42;
 export const CATCH_HEIGHT_MIN = 0.45;

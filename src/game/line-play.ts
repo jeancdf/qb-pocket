@@ -248,12 +248,18 @@ export class LinePlay {
    * QB crossed the line: every defender up front turns and runs
    * to where he will be, not where he is.
    */
-  pursue(dt: number, carrier: PlayerActor): void {
+  pursue(
+    dt: number,
+    carrier: PlayerActor,
+    skip: (p: PlayerActor) => boolean = () => false
+  ): void {
     for (const m of this.matches) {
-      this.chaseRunner(m.dl, carrier, CHASE_DL, dt);
+      if (!skip(m.dl)) {
+        this.chaseRunner(m.dl, carrier, CHASE_DL, dt);
+      }
     }
     for (const r of this.rushers) {
-      if (r.p.def.pos !== 'DL') {
+      if (r.p.def.pos !== 'DL' && !skip(r.p)) {
         this.chaseRunner(r.p, carrier, CHASE_LB, dt);
       }
     }

@@ -676,6 +676,10 @@ export class FootballGame {
         this.yac.poseTackler();
         continue;
       }
+      if (this.phase === 'yac' && this.yac.dives.has(p)) {
+        this.yac.dives.move(p, dt);
+        continue;
+      }
       if (p === qb && this.phase === 'play' && this.scrambling()) {
         continue;
       }
@@ -706,8 +710,9 @@ export class FootballGame {
         (p) => this.flight.isDiving(p)
       );
     } else if (this.phase === 'yac' && carrier && !this.yac.tackler) {
-      this.cover.chaseCarrier(dt, carrier);
-      this.line.pursue(dt, carrier);
+      const diving = (p: PlayerActor) => this.yac.dives.has(p);
+      this.cover.chaseCarrier(dt, carrier, diving);
+      this.line.pursue(dt, carrier, diving);
     }
   }
 

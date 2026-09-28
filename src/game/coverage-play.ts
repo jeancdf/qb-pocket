@@ -185,6 +185,8 @@ function readsOf(job: Job, db: PlayerActor): number {
   return 0.3;
 }
 
+/** Everyone in coverage runs a touch faster than authored. */
+const COVER_SPEED_SCALE = 1.05;
 const PA_BITE = 0.75;
 const PA_FREEZE = 0.45;
 
@@ -343,21 +345,28 @@ export class CoverPlay {
   }
 
   /**
-   * After-catch close vs YAC 5.7. First man stays under ~6.9 so a
-   * juke can still win; floor 6.55 so a trailer can still finish.
+   * After-catch close vs YAC 6.0. First man stays under ~7.25 so a
+   * juke can still win; floor 6.85 so a trailer can still finish.
    */
   private pursuitSpeed(job: Job): number {
-    return clamp(job.spd + 0.85, 6.55, 6.9);
+    return clamp(job.spd * COVER_SPEED_SCALE + 0.85, 6.85, 7.25);
   }
 
   /** After the catch, DBs/LBs run to the ball carrier. */
-  chaseCarrier(dt: number, wr: PlayerActor): void {
+  chaseCarrier(
+    dt: number,
+    wr: PlayerActor,
+    skip: (p: PlayerActor) => boolean = () => false
+  ): void {
     for (const job of this.jobs) {
       if (isPassRusher(job.id)) {
         continue;
       }
       const db = this.byId.get(job.id);
       if (!db) {
+        continue;
+      }
+      if (skip(db)) {
         continue;
       }
       // Take an angle: run to where the carrier is going.
@@ -380,7 +389,7 @@ export class CoverPlay {
     let shade = this.shade(job, receiver);
     shade = this.readEyes(db, job, shade);
     shade = this.sellFake(db, job, shade);
-    db.chase(shade, dt, job.spd * speedFactor);
+    db.chase(shade, dt, job.spd * COVER_SPEED_SCALE * speedFactor);
     this.keepEyesOnPlay(db, receiver);
   }
 
@@ -408,7 +417,7 @@ export class CoverPlay {
       x: future.x + inside * job.levX,
       z: Math.max(this.losZ + 0.6, future.z + cushion)
     };
-    db.chase(to, dt, job.spd * speedFactor);
+    db.chase(to, dt, job.spd * COVER_SPEED_SCALE * speedFactor);
   }
 
   /**

@@ -2,8 +2,8 @@ import { LOS_Z } from './constants';
 import type { RoutePoint, Vec2 } from './types';
 
 const L = LOS_Z;
-/** Live stems sit in the slower playbook band (~5–6 yd/s). */
-const ROUTE_SPEED_SCALE = 0.95;
+/** Authored route speeds, run as written (~5.5–6.3 yd/s). */
+const ROUTE_SPEED_SCALE = 1.0;
 
 export interface SkillPack {
   start: Vec2;

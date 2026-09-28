@@ -5,6 +5,7 @@
  */
 
 import { GOAL_Z, HALF_W, TACKLE_RANGE, YAC_SPEED } from './constants';
+import { DiveTackles } from './dive-tackle';
 import { clamp, xzDist } from './math';
 import type { PlayerActor } from './players';
 import type { Vec2 } from './types';
@@ -50,6 +51,8 @@ export class YacRun {
   state: JukeState = 'none';
   lastJuke: JukeResult = null;
   lastTacklerId: string | null = null;
+  /** Defenders who leave their feet to make the tackle. */
+  readonly dives = new DiveTackles();
   private jukeDir = 1;
   /** Heading and speed at the moment of the plant. */
   private jukeFace = 0;
@@ -82,6 +85,7 @@ export class YacRun {
     this.frontMissT = 0;
     this.jukeCool = 0;
     this.sprintLeft = SPRINT_TANK;
+    this.dives.clear();
   }
 
   /** New drive: also forget the last juke and tackler. */
@@ -226,12 +230,30 @@ export class YacRun {
     if (Math.abs(wr.x) >= HALF_W - 0.4) {
       return true;
     }
+    if (this.yacT >= 0.38) {
+      this.dives.launch(wr, this.players);
+      const diver = this.dives.contact(wr, (p) => this.dodged(p));
+      if (diver) {
+        this.dives.end(diver);
+        this.startTackle(wr, diver);
+        return false;
+      }
+    }
     const tackler = this.findTackler(wr);
     if (tackler) {
       this.startTackle(wr, tackler);
       return false;
     }
     return false;
+  }
+
+  /** The juke beat this defender (resolved, or he is still fooled). */
+  private dodged(p: PlayerActor): boolean {
+    if (p !== this.front) {
+      return false;
+    }
+    const cutting = this.state === 'cut' || this.state === 'escaped';
+    return (cutting && this.jukeWon) || this.frontMissT > 0;
   }
 
   status(): string {
@@ -369,7 +391,8 @@ export class YacRun {
     let tackler: PlayerActor | null = null;
     let distance = TACKLE_RANGE;
     for (const p of this.players) {
-      if (p.def.side !== 'defense' || p.isDown() || p.isStaggered()) {
+      if (p.def.side !== 'defense' || p.isDown() || p.isStaggered() ||
+          this.dives.has(p)) {
         continue;
       }
       const frontMiss = p === this.front && this.frontMissT > 0;
