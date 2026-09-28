@@ -47,6 +47,8 @@ const DIVE_LOOK = 0.34;
 const DIVE_AIR = 0.32;
 const DIVE_TOTAL = 0.95;
 const LEAP_TOTAL = 0.6;
+/** Highest ball (yd) a player laid out in the air can glove. */
+const DIVE_HANDS_MAX = 1.7;
 
 interface Dive {
   kind: 'dive' | 'leap';
@@ -134,6 +136,7 @@ export class PassFlight {
     this.planDives(ball, eligibles, players, qb);
     const leaping = [...this.divers.values()].some((d) => d.kind === 'leap');
     const top = CATCH_HEIGHT_MAX + (leaping ? LEAP_HEIGHT : 0);
+    // reach() below still checks each player's own hand height.
     if (ball.pos.y < CATCH_HEIGHT_MIN || ball.pos.y > top) {
       return FLYING;
     }
@@ -219,18 +222,34 @@ export class PassFlight {
     }
   }
 
-  /** Reach from where he stands, given his dive or leap. */
+  /**
+   * Reach from where he stands, given his dive or leap, and
+   * given how high his hands actually are right now. A player
+   * on the grass after a layout can't catch anything; one
+   * coming down from a leap only reaches what his hands still
+   * reach on the way down.
+   */
   private reach(p: PlayerActor, ball: Football, wr: boolean): number {
     const d = this.divers.get(p);
     const stand = wr ? CATCH_RADIUS : DB_REACH;
-    const overhead = ball.pos.y > CATCH_HEIGHT_MAX;
+    const y = ball.pos.y;
+    if (p.isDown()) {
+      return 0;
+    }
     if (!d || d.t < 0.08) {
-      return overhead ? 0 : stand;
+      return y > CATCH_HEIGHT_MAX ? 0 : stand;
     }
     if (d.kind === 'leap') {
-      return overhead ? stand * 0.8 : stand;
+      const u = Math.min(1, d.t / LEAP_TOTAL);
+      const top = CATCH_HEIGHT_MAX + LEAP_HEIGHT * Math.sin(Math.PI * u);
+      if (y > top) {
+        return 0;
+      }
+      return y > CATCH_HEIGHT_MAX ? stand * 0.8 : stand;
     }
-    if (overhead) {
+    // Layout: hands are out front and low, and only while he
+    // is still in the air. Once he lands he is out of the play.
+    if (d.t > DIVE_AIR + 0.08 || y > DIVE_HANDS_MAX) {
       return 0;
     }
     return wr ? WR_DIVE_REACH : DB_DIVE_REACH;
@@ -294,7 +313,7 @@ export class PassFlight {
     }
     // Commit only in the last beat, and only when standing
     // reach will not get there but a layout will.
-    if (best.d > stand && best.d <= far && best.t <= 0.26 && !high) {
+    if (best.d > stand && best.d <= far && best.t <= 0.26 && best.y <= DIVE_HANDS_MAX) {
       this.start(p, 'dive', best, DIVE_AIR);
     }
   }
@@ -368,8 +387,9 @@ export class PassFlight {
       if (p === qb) {
         continue;
       }
-      const n = this.reach(p, ball, true) - xzDist(p, ball.pos);
-      if (n >= slack) {
+      const r = this.reach(p, ball, true);
+      const n = r - xzDist(p, ball.pos);
+      if (r > 0 && n >= slack) {
         slack = n;
         best = p;
       }
@@ -392,8 +412,9 @@ export class PassFlight {
     let best: PlayerActor | null = null;
     let slack = 0;
     for (const p of cover) {
-      const n = this.reach(p, ball, false) - xzDist(p, ball.pos);
-      if (n >= slack) {
+      const r = this.reach(p, ball, false);
+      const n = r - xzDist(p, ball.pos);
+      if (r > 0 && n >= slack) {
         slack = n;
         best = p;
       }
