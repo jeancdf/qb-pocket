@@ -28,12 +28,22 @@ const FOLLOW = 3.8;
 const BALL_FOLLOW = 7;
 const BALL_LIFT = 0.6;
 const POCKET_BACK = 5;
-// Defense: the rig flips to the far side and looks back at the
+// Defense without a controlled man: the rig flips to the far side and looks back at the
 // offense (-z), a bit higher so the whole shell is in frame. The
 // subject sits DEF_LEAD yards on the defense side of the ball.
 const DEF_HEIGHT = 5.2;
 const DEF_BACK = 24;
 const DEF_LEAD = 7;
+// Defense: the rig rides behind the controlled defender and turns
+// to face the ball (the one place the camera yaws). Heavily
+// smoothed so it does not sway with every step.
+const DEF_CAM_BACK = 9;
+const DEF_CAM_HEIGHT = 4.2;
+const DEF_CAM_AHEAD = 6;
+const DEF_POS_FOLLOW = 3.2;
+const DEF_YAW_FOLLOW = 1.8;
+/** Ball closer than this: keep the current heading. */
+const DEF_YAW_DEADZONE = 2.5;
 
 export class MaddenCamera {
   private readonly cam: THREE.PerspectiveCamera;
@@ -50,6 +60,11 @@ export class MaddenCamera {
   private punch = false;
   /** +1 behind the offense (looking +z), -1 behind the defense. */
   private dir: 1 | -1 = 1;
+  /** Defense rig: defender spot and heading toward the ball. */
+  private defX = 0;
+  private defZ = 0;
+  private yaw = Math.PI;
+  private defReady = false;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -79,6 +94,47 @@ export class MaddenCamera {
   /** Which side the player is on: the rig goes behind that unit. */
   setSide(side: 'offense' | 'defense'): void {
     this.dir = side === 'offense' ? 1 : -1;
+    this.defReady = false;
+  }
+
+  /**
+   * Defense: stay behind the player's defender, facing the ball.
+   * `snap` jumps straight there (new possession / huddle).
+   */
+  trackDefender(
+    px: number,
+    pz: number,
+    bx: number,
+    bz: number,
+    dt: number,
+    snap = false
+  ): void {
+    const far = Math.hypot(bx - px, bz - pz) > DEF_YAW_DEADZONE;
+    const target = far ? Math.atan2(bx - px, bz - pz) : this.yaw;
+    if (snap || !this.defReady) {
+      this.defX = px;
+      this.defZ = pz;
+      this.yaw = target;
+      this.defReady = true;
+      return;
+    }
+    const kp = 1 - Math.exp(-dt * DEF_POS_FOLLOW);
+    this.defX = lerp(this.defX, px, kp);
+    this.defZ = lerp(this.defZ, pz, kp);
+    const ky = 1 - Math.exp(-dt * DEF_YAW_FOLLOW);
+    let d = target - this.yaw;
+    while (d > Math.PI) {
+      d -= Math.PI * 2;
+    }
+    while (d < -Math.PI) {
+      d += Math.PI * 2;
+    }
+    this.yaw += d * ky;
+  }
+
+  /** Heading the defense rig looks along (radians, 0 = +z). */
+  heading(): number {
+    return this.dir === 1 ? 0 : this.yaw;
   }
 
   /** Where the rig centres itself for a spot on the field. */
@@ -157,6 +213,10 @@ export class MaddenCamera {
   }
 
   private writePose(): void {
+    if (this.dir === -1 && this.defReady) {
+      this.writeDefensePose();
+      return;
+    }
     const d = this.dir;
     const height = d === 1 ? HEIGHT : DEF_HEIGHT;
     const back = d === 1 ? BACK : DEF_BACK;
@@ -166,6 +226,23 @@ export class MaddenCamera {
       this.look.x,
       this.look.y + height * this.zoom,
       this.look.z - back * this.zoom * d
+    );
+    this.cam.lookAt(this.look);
+  }
+
+  private writeDefensePose(): void {
+    const fx = Math.sin(this.yaw);
+    const fz = Math.cos(this.yaw);
+    const z = this.zoom;
+    this.look.set(
+      this.defX + fx * DEF_CAM_AHEAD,
+      LOOK_Y,
+      this.defZ + fz * DEF_CAM_AHEAD
+    );
+    this.cam.position.set(
+      this.defX - fx * DEF_CAM_BACK * z,
+      LOOK_Y + DEF_CAM_HEIGHT * z,
+      this.defZ - fz * DEF_CAM_BACK * z
     );
     this.cam.lookAt(this.look);
   }

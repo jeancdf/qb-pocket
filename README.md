@@ -60,7 +60,7 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | `cpu-offense.ts` | CPU offense when the player defends: play call, QB progression and throw, ball carrier AI. |
 | `defense-control.ts` | Player on defense: call sheet (1–7), controlled defender (gold ring), switching, movement. |
 | `game.ts` | `FootballGame`: phases, inputs, charging and releasing a throw, drive results. Glue only; put new rules in a module below. |
-| `camera.ts` | The only code that moves the camera. Stays behind the QB, no side offset; on defense it flips behind the defense (looks -z). |
+| `camera.ts` | The only code that moves the camera. Stays behind the QB, no side offset; on defense it rides behind the controlled defender and turns toward the ball (the only yaw, heavily smoothed); stick input follows that heading. |
 | `yac.ts` | Ball carrier after the catch or a scramble: juke, pursuit, tackle. |
 | `pass-flight.ts` | Ball in the air: receiver break, catch / drop / breakup / pick. |
 | `throwing.ts` | Pure throw math: charge power, accuracy, flight time, catch contest. |

@@ -867,11 +867,33 @@ export class FootballGame {
     }
   }
 
-  /** Stick in world axes: the defense camera looks down -z. */
+  /**
+   * Stick in world axes. On defense the camera turns with the
+   * ball, so forward / left follow its heading.
+   */
   private userStick(): Vec2 {
-    return this.defending
-      ? { x: -this.stickX, z: -this.stickZ }
-      : { x: this.stickX, z: this.stickZ };
+    if (!this.defending) {
+      return { x: this.stickX, z: this.stickZ };
+    }
+    const h = this.madden.heading();
+    const s = Math.sin(h);
+    const c = Math.cos(h);
+    return {
+      x: this.stickZ * s + this.stickX * c,
+      z: this.stickZ * c - this.stickX * s
+    };
+  }
+
+  /** Where the ball is right now: carrier, flight, QB or the spot. */
+  private ballSpot(): Vec2 {
+    if (this.yac.carrier) {
+      return this.yac.carrier;
+    }
+    if (this.ball.inAir || this.phase === 'presnap' ||
+        this.phase === 'whistle') {
+      return { x: this.ball.pos.x, z: this.ball.pos.z };
+    }
+    return this.qb();
   }
 
   /**
@@ -1256,6 +1278,11 @@ export class FootballGame {
     this.setRoutes(!this.defending);
     if (this.defending) {
       this.pickUser();
+      const user = this.defense.user;
+      if (user) {
+        const ball = this.ballSpot();
+        this.madden.trackDefender(user.x, user.z, ball.x, ball.z, 0, true);
+      }
       if (this.drive.down === 4 &&
           cpuPunts(this.drive.toGo, this.drive.losZ)) {
         this.punting = true;
@@ -1449,6 +1476,12 @@ export class FootballGame {
   private followCam(dt: number, live: boolean): void {
     const carrier = this.yac.carrier;
     this.madden.setPunch(this.phase === 'yac' && this.yac.isDown());
+    const user = this.defense.user;
+    if (this.defending && user) {
+      const ball = this.ballSpot();
+      this.madden.trackDefender(user.x, user.z, ball.x, ball.z, dt);
+      return;
+    }
     if (this.phase === 'yac' && carrier) {
       this.madden.follow(carrier.x, carrier.z, dt);
       return;
