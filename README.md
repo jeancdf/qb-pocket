@@ -30,6 +30,10 @@ Tab (or C) takes the defender nearest the ball, ZQSD runs him.
 - HUD row click — quick touch pass
 - Accuracy drops under pressure and on the move. Balls can be
   dropped, broken up, tipped, and intercepted.
+- **V** — cycle the run plays (Inside zone, Outside zone, Draw); after
+  the handoff ZQSD steers the RB. The line run-blocks for a moment,
+  then the DL get off their blocks.
+- **P** on 4th down in a match — punt (P again cancels)
 - **RESET** or R — same play again
 
 Green ring = open. Yellow = window. Red = covered. Hold the
@@ -46,6 +50,8 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | `menu.ts` | Title screen and the list of game modes. |
 | `match.ts` | Match rules: score, game clock, quarters, halftime, change of possession (spot mirrored, offense always attacks +z). |
 | `match-flow.ts` | A match between snaps: break cards, who gets the ball next, CPU possessions. |
+| `run-play.ts` | Run plays: QB path per play and the handoff moment (then the RB is a normal carrier). |
+| `punt.ts` | Punt distance, hang, return, touchback, and when the CPU punts on 4th down. |
 | `cpu-offense.ts` | CPU offense when the player defends: play call, QB progression and throw, ball carrier AI. |
 | `defense-control.ts` | Player on defense: call sheet (1–7), controlled defender (gold ring), switching, movement. |
 | `game.ts` | `FootballGame`: phases, inputs, charging and releasing a throw, drive results. Glue only; put new rules in a module below. |

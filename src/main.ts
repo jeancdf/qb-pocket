@@ -106,6 +106,14 @@ window.addEventListener('keydown', (ev) => {
   if (ev.key === 'm' || ev.key === 'M') {
     game.sendMotion();
   }
+  if (ev.key === 'p' || ev.key === 'P') {
+    game.callPunt();
+    paintHud();
+  }
+  if (ev.key === 'v' || ev.key === 'V') {
+    game.nextRun();
+    paintHud();
+  }
   if (/^[0-9]$/.test(ev.key) && game.phase === 'presnap') {
     // 1–9 then 0 for the tenth play.
     game.selectPlay(ev.key === '0' ? 9 : Number(ev.key) - 1);

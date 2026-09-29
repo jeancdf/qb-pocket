@@ -33,7 +33,16 @@ import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS } from './plays';
 import { handPos, PlayerActor } from './players';
 import { advancePoseClock } from './pose-blend';
+import {
+  cpuPunts,
+  planPunt,
+  PUNT_KICK_T,
+  puntEndZ,
+  PUNTER_DEPTH,
+  type PuntPlan
+} from './punt';
 import { QbEyes } from './qb-eyes';
+import { handoffReady, QB_START, qbPath } from './run-play';
 import { fitRoute } from './route-bounds';
 import { gradeReceiver } from './receiver-grade';
 import {
@@ -131,6 +140,11 @@ export class FootballGame {
   private readonly cpuQb = new CpuQb(0.5);
   private readonly cpuRun = new CpuRunner(0.5);
   private skill = 0.5;
+  /** This snap is a punt (P on 4th down, or the CPU's call). */
+  private punting = false;
+  private punt: PuntPlan | null = null;
+  private puntT = 0;
+  private kicked = false;
   private menuFn?: () => void;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -193,6 +207,30 @@ export class FootballGame {
     this.cover.setUser(this.defense.user?.def.id ?? null);
   }
 
+  /** P on 4th down in a match: line up to punt. */
+  callPunt(): void {
+    if (this.phase !== 'presnap' || !this.flow || this.defending ||
+        this.drive.over() || this.drive.down !== 4) {
+      return;
+    }
+    this.punting = !this.punting;
+    this.alignPunter();
+  }
+
+  isPunting(): boolean {
+    return this.punting;
+  }
+
+  /** V: cycle through the run plays. */
+  nextRun(): void {
+    if (this.defending) {
+      return;
+    }
+    const runs = PLAYS.map((p, i) => (p.run ? i : -1)).filter((i) => i >= 0);
+    const at = runs.indexOf(this.playIdx);
+    this.selectPlay(runs[(at + 1) % runs.length]);
+  }
+
   inMatch(): boolean {
     return this.flow !== null;
   }
@@ -214,6 +252,10 @@ export class FootballGame {
       this.huddle();
     }
     if (this.phase !== 'presnap') {
+      return;
+    }
+    if (this.punting) {
+      this.snapPunt();
       return;
     }
     this.lockMotionSpot();
@@ -283,6 +325,10 @@ export class FootballGame {
     }
     if (i < 0 || i >= PLAYS.length) {
       return;
+    }
+    if (this.punting) {
+      this.punting = false;
+      this.alignPunter();
     }
     this.playIdx = i;
     this.motionOn = false;
@@ -444,7 +490,7 @@ export class FootballGame {
     if (live) {
       this.clock += dt;
     }
-    if (live || this.phase === 'yac') {
+    if (live || this.phase === 'yac' || this.phase === 'punt') {
       this.flow?.match.tick(dt);
     }
     this.tickCharge(dt);
@@ -453,12 +499,17 @@ export class FootballGame {
     if (live || this.phase === 'yac') {
       separatePlayers(this.players, (a, b) => this.tackling(a, b));
     }
-    if (this.phase === 'play') {
+    if (this.phase === 'play' && PLAYS[this.playIdx].run) {
+      this.tryHandoff();
+    } else if (this.phase === 'play') {
       if (this.defending) {
         this.tickCpuQb(dt);
       } else {
         this.tickEyes(dt);
       }
+    }
+    if (this.phase === 'punt') {
+      this.tickPunt(dt);
     }
     this.ball.update(dt);
     if (this.ball.inAir) {
@@ -532,6 +583,14 @@ export class FootballGame {
   }
 
   readHint(): string {
+    if (this.punting) {
+      return this.defending
+        ? '4e tentative : ils vont punter. Espace pour le snap.'
+        : 'Punt. Espace pour botter, P pour annuler.';
+    }
+    if (this.flow && !this.defending && this.drive.down === 4) {
+      return '4e tentative : P pour punter, ou tente le coup.';
+    }
     if (this.defending) {
       const form = PLAYS[this.playIdx].form;
       return `Ils sortent en ${form}. 1–7 appel défensif · Tab change de joueur.`;
@@ -674,6 +733,8 @@ export class FootballGame {
         return this.yacStatus();
       case 'whistle':
         return 'Play is over. Next snap huddles at the new spot.';
+      case 'punt':
+        return 'Punt.';
       case 'touchdown':
         return 'TOUCHDOWN. You marched 90 yards. RESET to go again.';
       case 'turnover':
@@ -810,6 +871,7 @@ export class FootballGame {
 
   private canThrow(): boolean {
     return this.phase === 'play' && !this.defending &&
+      !PLAYS[this.playIdx].run &&
       this.qb().z <= this.drive.losZ + 0.4;
   }
 
@@ -921,6 +983,10 @@ export class FootballGame {
       }
     }
     for (const p of this.players) {
+      if (this.phase === 'punt') {
+        this.movePunt(p, dt);
+        continue;
+      }
       const line = p.def.pos === 'OL' || p.def.pos === 'DL';
       const db = isCoverage(p.def.pos);
       if (this.phase === 'yac' && carrier === p) {
@@ -979,6 +1045,98 @@ export class FootballGame {
     }
   }
 
+  /** Run play: the RB reaches the mesh and takes the ball. */
+  private tryHandoff(): void {
+    const qb = this.qb();
+    const rb = this.byId.get('rb');
+    if (!rb || !handoffReady(this.clock, qb, rb)) {
+      return;
+    }
+    rb.leaveRoute();
+    this.yac.start(rb);
+    this.ball.hold(rb.rig.rightHand);
+    this.phase = 'yac';
+    this.madden.setPhase('throw');
+    this.cpuRun.reset();
+    // A better CPU front gets off blocks sooner.
+    const hold = this.defending ? 1 : 1.3 - this.skill * 0.55;
+    this.line.startRun(hold);
+  }
+
+  /** Punter drops to his depth; everyone else stays in the formation. */
+  private alignPunter(): void {
+    const qb = this.qb();
+    const depth = this.punting ? PUNTER_DEPTH : 0;
+    const z = this.punting
+      ? this.drive.losZ - depth
+      : QB_START.z + (this.drive.losZ - LOS_Z);
+    qb.x = this.punting ? 0 : QB_START.x;
+    qb.z = z;
+    qb.place();
+    this.setRoutes(!this.punting && !this.defending);
+  }
+
+  private snapPunt(): void {
+    this.phase = 'punt';
+    this.clock = 0;
+    this.puntT = 0;
+    this.kicked = false;
+    this.punt = planPunt(this.drive.losZ);
+    this.ball.hold(this.qb().rig.rightHand);
+    this.madden.setPhase('play');
+    this.setRoutes(false);
+  }
+
+  private tickPunt(dt: number): void {
+    const plan = this.punt;
+    if (!plan) {
+      return;
+    }
+    this.puntT += dt;
+    if (!this.kicked && this.puntT >= PUNT_KICK_T) {
+      this.kicked = true;
+      const qb = this.qb();
+      const from = handPos(qb);
+      const to = new THREE.Vector3(plan.landing.x, 0.2, plan.landing.z);
+      this.ball.launch(this.scene, from, ballisticVel(from, to, plan.hang));
+      qb.lockAnim('throw', 0.5);
+      this.madden.setPhase('throw');
+    }
+    const landed = this.kicked &&
+      (!this.ball.inAir || this.puntT > PUNT_KICK_T + plan.hang + 0.8);
+    if (!landed) {
+      return;
+    }
+    const net = Math.round(puntEndZ(plan) - this.drive.losZ);
+    this.drive.turnover();
+    this.turnoverText = 'Punt';
+    this.finishDrive(
+      plan.touchback ? 'PUNT · TOUCHBACK' : `PUNT · ${net} YDS`,
+      true,
+      'turnover',
+      'punt',
+      'turnover',
+      puntEndZ(plan)
+    );
+  }
+
+  /** Gunners run under the kick, the returner goes to it. */
+  private movePunt(p: PlayerActor, dt: number): void {
+    const spot = this.punt?.landing;
+    const cover = p.def.side === 'offense' &&
+      p.def.pos !== 'OL' && p.def.pos !== 'QB';
+    if (spot && this.kicked && cover) {
+      p.leaveRoute();
+      p.chase(spot, dt, 6.3);
+      return;
+    }
+    if (spot && p.def.id === 'fs') {
+      p.chase(spot, dt, 6.6);
+      return;
+    }
+    p.update(dt, false);
+  }
+
   /** Player steers his own carrier; the CPU runs its own. */
   private moveCarrier(dt: number, p: PlayerActor): void {
     if (!this.defending) {
@@ -1033,8 +1191,15 @@ export class FootballGame {
     this.charge = null;
     this.motionOn = false;
     this.motionIdx = 0;
+    this.punting = false;
+    this.punt = null;
     if (this.defending) {
-      this.playIdx = callPlay(PLAYS, this.skill);
+      this.playIdx = callPlay(
+        PLAYS,
+        this.skill,
+        this.drive.down,
+        this.drive.toGo
+      );
       this.look = this.defense.call().look;
     } else {
       this.look = pickLook();
@@ -1059,6 +1224,11 @@ export class FootballGame {
     this.setRoutes(!this.defending);
     if (this.defending) {
       this.pickUser();
+      if (this.drive.down === 4 &&
+          cpuPunts(this.drive.toGo, this.drive.losZ)) {
+        this.punting = true;
+        this.alignPunter();
+      }
     }
   }
 
@@ -1251,7 +1421,8 @@ export class FootballGame {
       this.madden.follow(carrier.x, carrier.z, dt);
       return;
     }
-    if (this.phase === 'throw' && this.ball.inAir) {
+    if ((this.phase === 'throw' || this.phase === 'punt') &&
+        this.ball.inAir) {
       const b = this.ball.pos;
       this.madden.followBall(b.x, b.y, b.z, dt);
       return;
@@ -1264,6 +1435,11 @@ export class FootballGame {
 
   private applyOffense(): void {
     const play = PLAYS[this.playIdx];
+    this.qb().setSkill(
+      QB_START,
+      fitRoute(qbPath(play), this.drive.losZ),
+      'QB'
+    );
     for (const id of THROW_ORDER) {
       const pack = play.skill[id];
       const p = this.byId.get(id);
@@ -1341,7 +1517,7 @@ export class FootballGame {
   }
 
   private scrambling(): boolean {
-    return !this.defending && Math.abs(this.stickX) + Math.abs(this.stickZ) > 0.2;
+    return !this.defending && !PLAYS[this.playIdx].run && Math.abs(this.stickX) + Math.abs(this.stickZ) > 0.2;
   }
 
   private startQbRun(): void {

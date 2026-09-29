@@ -71,6 +71,8 @@ interface Match {
   contained: boolean;
   /** Snap time at which the DL beats his man (Infinity = never). */
   shedAt: number;
+  /** Run play: seconds after the handoff he gets off the block. */
+  runShedAt: number;
 }
 
 interface Rush {
@@ -99,6 +101,9 @@ export class LinePlay {
   private losZ = LOS_Z;
   private blitz?: string[];
   private spy = true;
+  /** A handoff happened: blocks hold, then the DL pursue. */
+  private running = false;
+  private runT = 0;
 
   constructor(byId: Map<string, PlayerActor>) {
     this.byId = byId;
@@ -122,6 +127,7 @@ export class LinePlay {
   /** Clears locks and picks 1–2 rushers for this snap. */
   reset(): void {
     this.t = 0;
+    this.running = false;
     this.helpDl = undefined;
     this.pickRushers();
     for (const m of this.matches) {
@@ -253,16 +259,44 @@ export class LinePlay {
     carrier: PlayerActor,
     skip: (p: PlayerActor) => boolean = () => false
   ): void {
+    this.runT += dt;
     for (const m of this.matches) {
-      if (!skip(m.dl)) {
-        this.chaseRunner(m.dl, carrier, CHASE_DL, dt);
+      if (skip(m.dl)) {
+        continue;
       }
+      if (this.holdsRunBlock(m)) {
+        // Still engaged: he fights toward the ball, the OL rides him.
+        bull(m, carrier, dt, m.push * 0.55);
+        split(m.ol, m.dl, PAD);
+        poseMatch(m, this.runT);
+        continue;
+      }
+      this.chaseRunner(m.dl, carrier, CHASE_DL, dt);
     }
     for (const r of this.rushers) {
       if (r.p.def.pos !== 'DL' && !skip(r.p)) {
         this.chaseRunner(r.p, carrier, CHASE_LB, dt);
       }
     }
+  }
+
+  /**
+   * Handoff: every DL still on his blocker holds the block for a
+   * while before he gets off it. `hold` scales how long (a weak
+   * front gets washed out longer).
+   */
+  startRun(hold: number): void {
+    this.running = true;
+    this.runT = 0;
+    for (const m of this.matches) {
+      const engaged = m.locked && !isPassRusher(m.dl.def.id);
+      m.runShedAt = engaged ? (0.35 + Math.random() * 1.6) * hold : 0;
+    }
+  }
+
+  private holdsRunBlock(m: Match): boolean {
+    return this.running && m.locked && this.runT < m.runShedAt &&
+      !isPassRusher(m.dl.def.id);
   }
 
   private chaseRunner(
@@ -319,7 +353,8 @@ export class LinePlay {
       contain: { x: s.cx, z: cz },
       locked: false,
       contained: false,
-      shedAt: Number.POSITIVE_INFINITY
+      shedAt: Number.POSITIVE_INFINITY,
+      runShedAt: 0
     });
   }
 

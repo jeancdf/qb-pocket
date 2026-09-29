@@ -23,9 +23,20 @@ export type QbCall =
   | { kind: 'away'; spot: Vec2 }
   | null;
 
-/** Weighted play call; a better CPU leans on its best concepts. */
-export function callPlay(plays: OffPlay[], skill: number): number {
-  const weights = plays.map((p) => (p.pa ? 0.7 : 1) + skill * 0.2);
+/**
+ * Weighted play call from the down and distance: runs on short
+ * yardage, passes on third and long.
+ */
+export function callPlay(
+  plays: OffPlay[],
+  skill: number,
+  down: number,
+  toGo: number
+): number {
+  const runW = toGo <= 3 ? 2.6 : down >= 3 && toGo >= 7 ? 0.2 : 1.4;
+  const weights = plays.map((p) =>
+    p.run ? runW : (p.pa ? 0.7 : 1) + skill * 0.2
+  );
   const total = weights.reduce((s, w) => s + w, 0);
   let roll = Math.random() * total;
   for (let i = 0; i < weights.length; i += 1) {

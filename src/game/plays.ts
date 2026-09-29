@@ -23,6 +23,10 @@ export interface OffPlay {
   pa?: boolean;
   /** Pre-snap read shown in the HUD. */
   hint?: string;
+  /** Handoff: the RB takes it (see run-play.ts), nobody throws. */
+  run?: boolean;
+  /** QB path for this play; the gun drop when absent. */
+  qb?: RoutePoint[];
 }
 
 function pack(
@@ -424,4 +428,103 @@ export const MORE_PLAYS: OffPlay[] = [
   }
 ];
 
-PLAYS.push(...MORE_PLAYS);
+/** Receivers on a run: release, then sit on the man in front. */
+function stalk(x: number, z: number): SkillPack {
+  const out = Math.sign(x) * 0.4;
+  return pack(x, z, 'Stalk', [
+    { x: x + out, z: L + 3.0, speed: 5.2 },
+    { x: x + out, z: L + 4.2, speed: 3.2 },
+    { x: x + out, z: L + 4.4, wait: 8, speed: 1.5 }
+  ]);
+}
+
+function teBlock(): SkillPack {
+  return pack(6.6, L - 0.42, 'Block', [
+    { x: 6.5, z: L + 0.6, speed: 3.0 },
+    { x: 6.4, z: L + 0.8, wait: 8, speed: 1.5 }
+  ]);
+}
+
+/** Gun handoff: the QB rides the mesh, then boots away. */
+const QB_MESH: RoutePoint[] = [
+  { x: 0.1, z: L - 5.0, speed: 2.0, wait: 0.35 },
+  { x: -3.0, z: L - 6.6, speed: 4.2 }
+];
+
+export const RUN_PLAYS: OffPlay[] = [
+  {
+    id: 'inside-zone',
+    name: 'INSIDE ZONE',
+    form: 'GUN DOUBLES',
+    beat: 'Cover 2',
+    hint: 'Two-high: run it inside',
+    run: true,
+    qb: QB_MESH,
+    motionId: 'wrH',
+    motion: JET,
+    skill: {
+      wrZ: stalk(19.2, L - 0.9),
+      wrH: stalk(8.2, L - 1.05),
+      wrX: stalk(-18.4, L - 0.9),
+      te: teBlock(),
+      rb: pack(-1.9, L - 5.3, 'Inside zone', [
+        { x: -0.4, z: L - 4.7, speed: 5.0 },
+        { x: 0.9, z: L - 1.2, speed: 6.0 },
+        { x: 1.4, z: L + 6.0, speed: 6.2 },
+        { x: 1.2, z: L + 30.0, speed: 6.2 }
+      ])
+    }
+  },
+  {
+    id: 'outside-zone',
+    name: 'OUTSIDE ZONE',
+    form: 'GUN DOUBLES',
+    beat: 'Cover 4',
+    hint: 'Stretch it to the TE side',
+    run: true,
+    qb: QB_MESH,
+    motionId: 'wrH',
+    motion: JET,
+    skill: {
+      wrZ: stalk(19.2, L - 0.9),
+      wrH: stalk(8.2, L - 1.05),
+      wrX: stalk(-18.4, L - 0.9),
+      te: teBlock(),
+      rb: pack(-1.9, L - 5.3, 'Outside zone', [
+        { x: -0.2, z: L - 4.9, speed: 5.2 },
+        { x: 4.5, z: L - 3.6, speed: 6.0 },
+        { x: 8.8, z: L - 0.8, speed: 6.2 },
+        { x: 10.0, z: L + 6.0, speed: 6.2 },
+        { x: 10.0, z: L + 30.0, speed: 6.2 }
+      ])
+    }
+  },
+  {
+    id: 'draw',
+    name: 'DRAW',
+    form: 'GUN DOUBLES',
+    beat: 'Blitz',
+    hint: 'Let the rush fly past, then hit it',
+    run: true,
+    qb: [
+      { x: 0.2, z: L - 6.4, speed: 3.6, wait: 0.35 },
+      { x: -2.5, z: L - 7.2, speed: 3.5 }
+    ],
+    motionId: 'wrH',
+    motion: JET,
+    skill: {
+      wrZ: stalk(19.2, L - 0.9),
+      wrH: stalk(8.2, L - 1.05),
+      wrX: stalk(-18.4, L - 0.9),
+      te: teBlock(),
+      rb: pack(-1.9, L - 5.3, 'Draw', [
+        { x: -1.6, z: L - 5.4, wait: 0.55, speed: 3.0 },
+        { x: -0.2, z: L - 6.0, speed: 4.2 },
+        { x: -0.5, z: L - 1.0, speed: 6.0 },
+        { x: -1.0, z: L + 30.0, speed: 6.2 }
+      ])
+    }
+  }
+];
+
+PLAYS.push(...MORE_PLAYS, ...RUN_PLAYS);
