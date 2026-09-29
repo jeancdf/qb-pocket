@@ -1,4 +1,5 @@
 import type { CoverGrade } from './types';
+import type { BreakCard } from './match';
 import type { OffPlay } from './plays';
 
 export interface HudRow {
@@ -30,6 +31,9 @@ export class Hud {
   private hintEl: HTMLElement;
   private homeEl: HTMLElement;
   private awayEl: HTMLElement;
+  private clockEl: HTMLElement;
+  private resultHint: HTMLElement;
+  private resetBtn: HTMLElement;
   private bookOpen = false;
   private toastTimer: number | null = null;
 
@@ -53,6 +57,9 @@ export class Hud {
     this.hintEl = el('read-hint');
     this.homeEl = el('home-score');
     this.awayEl = el('away-score');
+    this.clockEl = el('game-clock');
+    this.resultHint = el('result-hint');
+    this.resetBtn = el('reset-btn');
     this.playbook.hidden = true;
   }
 
@@ -111,6 +118,13 @@ export class Hud {
     this.awayEl.textContent = String(away);
   }
 
+  /** Match clock; empty hides it (practice). */
+  setClock(line: string): void {
+    this.clockEl.hidden = line === '';
+    this.clockEl.textContent = line;
+    this.resetBtn.hidden = line !== '';
+  }
+
   setRead(text: string, show: boolean): void {
     this.hintEl.textContent = text;
     this.hintEl.classList.toggle('is-away', !show);
@@ -144,17 +158,16 @@ export class Hud {
     });
   }
 
-  setResult(over: 'win' | 'loss' | null): void {
-    if (!over) {
+  setCard(card: BreakCard | null): void {
+    if (!card) {
       this.resultEl.hidden = true;
       return;
     }
     this.resultEl.hidden = false;
-    this.resultEl.classList.toggle('is-bad', over === 'loss');
-    this.resultKick.textContent =
-      over === 'win' ? 'TOUCHDOWN' : 'TURNOVER ON DOWNS';
-    this.resultTitle.textContent =
-      over === 'win' ? 'YOU WIN' : 'DRIVE OVER';
+    this.resultEl.classList.toggle('is-bad', card.bad);
+    this.resultKick.textContent = card.kicker;
+    this.resultTitle.textContent = card.title;
+    this.resultHint.textContent = card.hint;
   }
 }
 

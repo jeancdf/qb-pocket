@@ -23,8 +23,8 @@ const CARDS: ModeCard[] = [
     kicker: 'Match rapide',
     title: 'MATCH',
     blurb:
-      'Attaque puis défense, possessions qui alternent, chrono et score.',
-    ready: false
+      'Quatre quart-temps, possessions qui alternent, chrono et score.',
+    ready: true
   },
   {
     mode: 'practice',

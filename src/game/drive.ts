@@ -75,9 +75,14 @@ export class Drive {
   }
 
   kickoff(): void {
-    this.losZ = DRIVE_START_Z;
+    this.startAt(DRIVE_START_Z);
+  }
+
+  /** Fresh set of downs from `losZ` (1st & 10, or & goal). */
+  startAt(losZ: number): void {
+    this.losZ = losZ;
     this.down = 1;
-    this.toGo = 10;
+    this.toGo = Math.min(10, this.remain());
     this.won = false;
     this.lost = false;
   }

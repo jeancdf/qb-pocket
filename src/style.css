@@ -585,3 +585,9 @@ body.in-menu .toast {
     min-height: 0;
   }
 }
+
+.scorebug__clock {
+  color: var(--paper);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.08em;
+}

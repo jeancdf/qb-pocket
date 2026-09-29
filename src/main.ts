@@ -14,13 +14,17 @@ window.__qb = game;
 const hud = new Hud();
 const meter = new ThrowMeter();
 const menu = new Menu();
-menu.onPick(() => {
+menu.onPick((mode) => {
   hud.hidePlaybook();
-  game.reset();
+  if (mode === 'practice') {
+    game.startPractice();
+  } else {
+    game.startMatch(0.5);
+  }
   paintHud();
 });
 game.onToast((msg, bad) => hud.toast(msg, bad));
-game.onOver((over) => hud.setResult(over));
+game.onMenu(() => openMenu());
 const ro = new ResizeObserver(() => game.resize());
 ro.observe(canvas);
 
@@ -198,12 +202,8 @@ function frame(now: number): void {
 function paintHud(): void {
   hud.setReceivers(game.hudRows());
   hud.setStatus(game.statusText());
-  const canSnap =
-    game.phase === 'presnap' || game.phase === 'whistle';
-  hud.setSnapEnabled(canSnap && !game.callSheet().over);
-  hud.setLiveChrome(
-    game.phase === 'presnap' || game.phase === 'whistle'
-  );
+  hud.setSnapEnabled(game.canSnap());
+  hud.setLiveChrome(game.canSnap());
   const call = game.callSheet();
   hud.setDrive(
     game.downLine(),
@@ -218,7 +218,8 @@ function paintHud(): void {
     game.phase === 'presnap'
   );
   hud.setRead(game.readHint(), game.phase === 'presnap');
-  hud.setResult(call.over);
+  hud.setCard(game.breakCard());
+  hud.setClock(game.clockLine());
 }
 
 paintHud();

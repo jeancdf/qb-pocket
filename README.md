@@ -15,7 +15,9 @@ The camera sits low behind the QB, in line with the field
 (downfield at the top of the screen). Scroll to zoom.
 
 The game opens on a title screen: pick a mode there (**LANCER** is
-the single practice drive). **MENU** or Esc goes back to it.
+the single practice drive, **MATCH** four 4-minute quarters against
+the CPU). **MENU** or Esc goes back to it. In a match, Space / SNAP
+moves on from each break card.
 
 ## Controls
 
@@ -40,6 +42,9 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | File | What it owns |
 | --- | --- |
 | `menu.ts` | Title screen and the list of game modes. |
+| `match.ts` | Match rules: score, game clock, quarters, halftime, change of possession (spot mirrored, offense always attacks +z). |
+| `match-flow.ts` | A match between snaps: break cards, who gets the ball next, CPU possessions. |
+| `opponent-sim.ts` | CPU possession resolved off-screen (until the defense mode takes over). |
 | `game.ts` | `FootballGame`: phases, inputs, charging and releasing a throw, drive results. Glue only; put new rules in a module below. |
 | `camera.ts` | The only code that moves the camera. Stays behind the QB, no side offset. |
 | `yac.ts` | Ball carrier after the catch or a scramble: juke, pursuit, tackle. |

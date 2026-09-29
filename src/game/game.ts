@@ -17,6 +17,8 @@ import {
 import { CoverPlay, isCoverage, nearestEligible } from './coverage-play';
 import { separatePlayers } from './collisions';
 import { Drive } from './drive';
+import type { BreakCard, DriveEnd, PlayEnd } from './match';
+import { MatchFlow } from './match-flow';
 import { GetOpen } from './get-open';
 import { buildWorld, type FieldSticks } from './field';
 import type { HudRow } from './hud';
@@ -119,7 +121,8 @@ export class FootballGame {
   private charge: { target: ThrowTarget; t: number } | null = null;
   private turnoverText = '';
   private toast?: (msg: string, bad: boolean) => void;
-  private overFn?: (over: 'win' | 'loss' | null) => void;
+  private flow: MatchFlow | null = null;
+  private menuFn?: () => void;
 
   constructor(canvas: HTMLCanvasElement) {
     this.camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
@@ -144,12 +147,38 @@ export class FootballGame {
     this.toast = fn;
   }
 
-  onOver(fn: (over: 'win' | 'loss' | null) => void): void {
-    this.overFn = fn;
+  /** Match over and the player pressed on: back to the title. */
+  onMenu(fn: () => void): void {
+    this.menuFn = fn;
+  }
+
+  /** LANCER: the single practice drive from the 10. */
+  startPractice(): void {
+    this.flow = null;
+    this.reset();
+  }
+
+  /** MATCH: four quarters against a CPU team (`skill` 0..1). */
+  startMatch(skill: number): void {
+    this.flow = new MatchFlow(skill);
+    this.newDrive(this.flow.match.startZ);
+  }
+
+  inMatch(): boolean {
+    return this.flow !== null;
+  }
+
+  /** SNAP is live: a snap, or pressing on from a break card. */
+  canSnap(): boolean {
+    if (this.drive.over()) {
+      return this.flow !== null;
+    }
+    return this.phase === 'presnap' || this.phase === 'whistle';
   }
 
   snap(): void {
     if (this.drive.over()) {
+      this.pressOn();
       return;
     }
     if (this.phase === 'whistle') {
@@ -169,15 +198,32 @@ export class FootballGame {
   }
 
   reset(): void {
+    if (this.flow) {
+      return;
+    }
     this.drive.kickoff();
     this.drive.home = 0;
     this.drive.away = 0;
+    this.newDrive(this.drive.losZ);
+  }
+
+  private newDrive(losZ: number): void {
+    this.drive.startAt(losZ);
     this.playIdx = 0;
     this.yac.forget();
     this.flightPeak = 0;
     this.turnoverText = '';
-    this.overFn?.(null);
     this.huddle();
+  }
+
+  /** Break card on screen: next possession, CPU drive, or menu. */
+  private pressOn(): void {
+    const next = this.flow?.advance();
+    if (next?.kind === 'drive') {
+      this.newDrive(next.startZ);
+    } else if (next?.kind === 'menu') {
+      this.menuFn?.();
+    }
   }
 
   /** Pre-snap audible. Indexes PLAYS (keys 1–9, 0). */
@@ -348,6 +394,9 @@ export class FootballGame {
     if (live) {
       this.clock += dt;
     }
+    if (live || this.phase === 'yac') {
+      this.flow?.match.tick(dt);
+    }
     this.tickCharge(dt);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
@@ -430,7 +479,32 @@ export class FootballGame {
   }
 
   score(): { home: number; away: number } {
-    return { home: this.drive.home, away: this.drive.away };
+    const m = this.flow?.match;
+    return m
+      ? { home: m.home, away: m.away }
+      : { home: this.drive.home, away: this.drive.away };
+  }
+
+  /** Q1 2:45 in a match, empty in practice. */
+  clockLine(): string {
+    return this.flow?.match.clockLine() ?? '';
+  }
+
+  /** Overlay between possessions / at the end. */
+  breakCard(): BreakCard | null {
+    if (!this.drive.over()) {
+      return null;
+    }
+    if (this.flow) {
+      return this.flow.card;
+    }
+    const won = this.drive.won;
+    return {
+      kicker: won ? 'TOUCHDOWN' : 'TURNOVER ON DOWNS',
+      title: won ? 'YOU WIN' : 'DRIVE OVER',
+      hint: 'R — drive again from the 10',
+      bad: !won
+    };
   }
 
   callSheet(): {
@@ -729,19 +803,19 @@ export class FootballGame {
     const r = this.drive.gainTo(wr.z);
     if (r === 'td') {
       this.drive.scoreTd();
-      this.finishDrive('TOUCHDOWN', false, 'touchdown');
+      this.finishDrive('TOUCHDOWN', false, 'touchdown', 'td', 'score');
       return;
     }
     if (r === 'first') {
-      this.blow('FIRST DOWN', false);
+      this.blow('FIRST DOWN', false, 'tackle');
       return;
     }
     if (r === 'turnover') {
       this.drive.turnover();
-      this.finishDrive('TURNOVER ON DOWNS', true, 'turnover');
+      this.finishDrive('TURNOVER ON DOWNS', true, 'turnover', 'downs', 'tackle');
       return;
     }
-    this.blow(this.drive.downLine(), false);
+    this.blow(this.drive.downLine(), false, 'tackle');
   }
 
   private huddle(): void {
@@ -873,6 +947,8 @@ export class FootballGame {
     this.finishDrive(
       `INTERCEPTED · #${db.def.number}`,
       true,
+      'turnover',
+      'pick',
       'turnover'
     );
   }
@@ -899,10 +975,10 @@ export class FootballGame {
     if (r === 'turnover') {
       this.drive.turnover();
       this.turnoverText = 'Turnover on downs';
-      this.finishDrive('TURNOVER ON DOWNS', true, 'turnover');
+      this.finishDrive('TURNOVER ON DOWNS', true, 'turnover', 'downs', 'incomplete');
       return;
     }
-    this.blow(msg, true);
+    this.blow(msg, true, 'incomplete');
   }
 
   private deadSack(by: PlayerActor): void {
@@ -913,16 +989,18 @@ export class FootballGame {
     const r = this.drive.sackAt(qb.z);
     if (r === 'turnover') {
       this.drive.turnover();
-      this.finishDrive('TURNOVER ON DOWNS', true, 'turnover');
+      this.finishDrive('TURNOVER ON DOWNS', true, 'turnover', 'downs', 'tackle');
       return;
     }
-    this.blow('SACK', true);
+    this.blow('SACK', true, 'tackle');
   }
 
   private finishDrive(
     msg: string,
     bad: boolean,
-    phase: Phase
+    phase: Phase,
+    end: DriveEnd,
+    play: PlayEnd
   ): void {
     this.phase = phase;
     this.whistleT = 0;
@@ -930,16 +1008,26 @@ export class FootballGame {
     this.aimMark.hide();
     this.setRoutes(false);
     this.toast?.(msg, bad);
-    this.overFn?.(this.drive.won ? 'win' : 'loss');
+    if (this.flow) {
+      const clock = this.flow.playOver(play);
+      this.flow.homeDriveOver(end, this.drive.losZ, clock);
+    }
   }
 
-  private blow(msg: string, bad: boolean): void {
+  private blow(msg: string, bad: boolean, play: PlayEnd): void {
     this.phase = 'whistle';
     this.whistleT = 0;
     this.madden.setPhase('dead');
     this.aimMark.hide();
     this.setRoutes(false);
     this.toast?.(msg, bad);
+    const clock = this.flow?.playOver(play) ?? 'none';
+    if (clock !== 'none') {
+      // Quarter 2 or 4 ran out on this snap: the possession stops.
+      this.drive.turnover();
+      this.phase = 'turnover';
+      this.flow?.homeDriveOver('clock', this.drive.losZ, clock);
+    }
   }
 
   private followCam(dt: number, live: boolean): void {
