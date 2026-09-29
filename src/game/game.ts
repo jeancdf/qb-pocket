@@ -48,6 +48,13 @@ import {
   PUNTER_DEPTH,
   type PuntPlan
 } from './punt';
+import {
+  FIELD_HEIGHT,
+  FIELD_RANGE,
+  PuntReturn,
+  RETURNER_DEPTH,
+  type ReturnEnd
+} from './punt-return';
 import { QbEyes } from './qb-eyes';
 import { handoffReady, QB_START, qbPath } from './run-play';
 import { fitRoute } from './route-bounds';
@@ -152,6 +159,9 @@ export class FootballGame {
   private punt: PuntPlan | null = null;
   private puntT = 0;
   private kicked = false;
+  private readonly puntRet = new PuntReturn();
+  /** Where the returner fielded it (world z). */
+  private fieldZ = 0;
   private menuFn?: () => void;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -228,7 +238,7 @@ export class FootballGame {
 
   /** Tab: take the defender nearest the ball. */
   switchPlayer(): void {
-    if (!this.defending) {
+    if (!this.defending || this.phase === 'return' || this.punting) {
       return;
     }
     const ball = this.yac.carrier ??
@@ -399,6 +409,10 @@ export class FootballGame {
 
   /** Space with the ball in the open field: juke toward the stick. */
   juke(): void {
+    if (this.phase === 'return') {
+      this.puntRet.juke(Math.sign(this.stickX), this.puntCover());
+      return;
+    }
     if (this.phase === 'yac' && !this.defending) {
       this.yac.requestJuke(Math.sign(this.stickX));
     }
@@ -525,13 +539,14 @@ export class FootballGame {
     if (live) {
       this.clock += dt;
     }
-    if (live || this.phase === 'yac' || this.phase === 'punt') {
+    if (live || this.phase === 'yac' || this.phase === 'punt' ||
+        this.phase === 'return') {
       this.flow?.match.tick(dt);
     }
     this.tickCharge(dt);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
-    if (live || this.phase === 'yac') {
+    if (live || this.phase === 'yac' || this.phase === 'return') {
       separatePlayers(this.players, (a, b) => this.tackling(a, b));
     }
     if (this.phase === 'play' && PLAYS[this.playIdx].run) {
@@ -545,6 +560,9 @@ export class FootballGame {
     }
     if (this.phase === 'punt') {
       this.tickPunt(dt);
+    }
+    if (this.phase === 'return') {
+      this.tickReturn(dt);
     }
     this.ball.update(dt);
     if (this.ball.inAir) {
@@ -791,6 +809,8 @@ export class FootballGame {
       case 'throw':
       case 'yac':
         return 'ZQSD ton joueur (anneau doré) · Shift sprint · Tab change.';
+      case 'return':
+        return 'Retour de punt : ZQSD · Shift sprint · Espace juke.';
       default:
         return '';
     }
@@ -902,6 +922,11 @@ export class FootballGame {
 
   /** Where the ball is right now: carrier, flight, QB or the spot. */
   private ballSpot(): Vec2 {
+    const ret = this.puntRet.carrier;
+    if (this.phase === 'return' && ret) {
+      // Look where he is running: the kicking team's end zone.
+      return { x: ret.x, z: ret.z - 10 };
+    }
     if (this.yac.carrier) {
       return this.yac.carrier;
     }
@@ -1058,6 +1083,10 @@ export class FootballGame {
       }
     }
     for (const p of this.players) {
+      if (this.phase === 'return') {
+        // punt-return.ts moves everyone.
+        continue;
+      }
       if (this.phase === 'punt') {
         this.movePunt(p, dt);
         continue;
@@ -1152,6 +1181,15 @@ export class FootballGame {
     qb.x = this.punting ? 0 : QB_START.x;
     qb.z = z;
     qb.place();
+    const returner = this.byId.get('fs');
+    if (this.punting && this.defending && returner) {
+      // Our returner waits deep for the CPU's punt.
+      returner.x = 0;
+      returner.z = this.drive.losZ + RETURNER_DEPTH;
+      returner.place();
+      // The camera rides with him while he gets under the ball.
+      this.defense.take(returner);
+    }
     this.setRoutes(!this.punting && !this.defending);
   }
 
@@ -1161,6 +1199,7 @@ export class FootballGame {
     this.puntT = 0;
     this.kicked = false;
     this.punt = planPunt(this.drive.losZ);
+    this.puntRet.clear();
     this.ball.hold(this.qb().rig.rightHand);
     this.madden.setPhase('play');
     this.setRoutes(false);
@@ -1180,6 +1219,13 @@ export class FootballGame {
       this.ball.launch(this.scene, from, ballisticVel(from, to, plan.hang));
       qb.lockAnim('throw', 0.5);
       this.madden.setPhase('throw');
+    }
+    const returner = this.byId.get('fs');
+    if (this.kicked && this.defending && returner && this.ball.inAir &&
+        this.ball.pos.y < FIELD_HEIGHT &&
+        xzDist(returner, this.ball.pos) < FIELD_RANGE) {
+      this.startReturn(returner);
+      return;
     }
     const landed = this.kicked &&
       (!this.ball.inAir || this.puntT > PUNT_KICK_T + plan.hang + 0.8);
@@ -1210,10 +1256,71 @@ export class FootballGame {
       return;
     }
     if (spot && p.def.id === 'fs') {
-      p.chase(spot, dt, 6.6);
+      // The returner goes and stands under it.
+      p.meet(spot, dt, 7.2, { x: this.ball.pos.x, z: this.ball.pos.z }, 'catch');
       return;
     }
     p.update(dt, false);
+  }
+
+  /** Our returner fields the CPU's punt: the player runs it back. */
+  private startReturn(returner: PlayerActor): void {
+    this.ball.hold(returner.rig.rightHand);
+    returner.lockAnim('catch', 0.3);
+    this.fieldZ = returner.z;
+    this.phase = 'return';
+    this.defense.take(returner);
+    this.cover.setUser(null);
+    this.puntRet.start(returner);
+    this.madden.setPhase('throw');
+    this.say('RETOUR DE PUNT', true);
+  }
+
+  /** Kicking team: everyone on the CPU side chases the returner. */
+  private puntCover(): PlayerActor[] {
+    return this.players.filter((p) => p.def.side === 'offense');
+  }
+
+  private tickReturn(dt: number): void {
+    const returner = this.puntRet.carrier;
+    const blockers = this.defenders().filter((p) => p !== returner);
+    const end = this.puntRet.tick(
+      dt,
+      this.userStick(),
+      this.sprint,
+      this.puntCover(),
+      blockers
+    );
+    if (end) {
+      this.finishReturn(end);
+    }
+  }
+
+  private finishReturn(end: ReturnEnd): void {
+    const c = this.puntRet.carrier;
+    const z = c?.z ?? this.fieldZ;
+    const yds = Math.max(0, Math.round(this.fieldZ - z));
+    this.drive.turnover();
+    this.turnoverText = 'Punt';
+    if (end === 'td') {
+      this.finishDrive(
+        'TOUCHDOWN SUR RETOUR',
+        true,
+        'turnover',
+        'return-td',
+        'score',
+        z
+      );
+      return;
+    }
+    this.finishDrive(
+      `RETOUR · ${yds} YDS`,
+      true,
+      'turnover',
+      'punt',
+      'turnover',
+      z
+    );
   }
 
   /** Player steers his own carrier; the CPU runs its own. */

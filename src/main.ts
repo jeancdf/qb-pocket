@@ -108,7 +108,7 @@ window.addEventListener('keydown', (ev) => {
   }
   if (ev.code === 'Space') {
     ev.preventDefault();
-    if (game.phase === 'yac') {
+    if (game.phase === 'yac' || game.phase === 'return') {
       game.juke();
       return;
     }

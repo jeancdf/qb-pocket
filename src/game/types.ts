@@ -46,6 +46,7 @@ export type Phase =
   | 'sack'
   | 'touchdown'
   | 'turnover'
-  | 'punt';
+  | 'punt'
+  | 'return';
 
 export type CoverGrade = 'idle' | 'open' | 'window' | 'covered';

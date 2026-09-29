@@ -1,4 +1,5 @@
 import {
+  other,
   Match,
   type BreakCard,
   type DriveEnd,
@@ -26,7 +27,8 @@ const HOME_END: Record<DriveEnd, string> = {
   downs: 'TURNOVER ON DOWNS',
   pick: 'INTERCEPTÉ',
   punt: 'PUNT',
-  clock: 'FIN DE LA MI-TEMPS'
+  clock: 'FIN DE LA MI-TEMPS',
+  'return-td': 'TOUCHDOWN ADVERSE SUR RETOUR DE PUNT'
 };
 
 const AWAY_END: Record<DriveEnd, string> = {
@@ -34,7 +36,8 @@ const AWAY_END: Record<DriveEnd, string> = {
   downs: 'STOPPÉS SUR 4E TENTATIVE',
   pick: 'INTERCEPTION !',
   punt: 'PUNT ADVERSE',
-  clock: 'FIN DE LA MI-TEMPS'
+  clock: 'FIN DE LA MI-TEMPS',
+  'return-td': 'TOUCHDOWN SUR RETOUR DE PUNT !'
 };
 
 /**
@@ -69,9 +72,13 @@ export class MatchFlow {
     if (end === 'td') {
       m.addTd(team);
     }
+    if (end === 'return-td') {
+      m.addTd(other(team));
+    }
     const head = team === 'home' ? HOME_END[end] : AWAY_END[end];
     // Good news for the player: their score, or a stop.
-    const good = team === 'home' ? end === 'td' : end !== 'td';
+    const scored = end === 'td' ? team : end === 'return-td' ? other(team) : null;
+    const good = scored ? scored === 'home' : team === 'away';
     if (clock === 'final' || m.finished) {
       const out = m.outcome();
       this.card = m.finalCard(this.opts.finalHint?.(out));

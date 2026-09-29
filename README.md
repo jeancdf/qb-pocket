@@ -57,6 +57,7 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | `match-flow.ts` | A match between snaps: break cards, who gets the ball next, CPU possessions. |
 | `run-play.ts` | Run plays: QB path per play and the handoff moment (then the RB is a normal carrier). |
 | `punt.ts` | Punt distance, hang, return, touchback, and when the CPU punts on 4th down. |
+| `punt-return.ts` | CPU punts: the player's returner (FS) gets under the ball, then the player runs it back (ZQSD, Shift, Space juke) against the cover team. |
 | `cpu-offense.ts` | CPU offense when the player defends: play call, QB progression and throw, ball carrier AI. |
 | `defense-control.ts` | Player on defense: call sheet (1–7), controlled defender (gold ring), switching, movement. |
 | `game.ts` | `FootballGame`: phases, inputs, charging and releasing a throw, drive results. Glue only; put new rules in a module below. |

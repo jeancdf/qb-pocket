@@ -12,7 +12,14 @@ export type PlayEnd =
   | 'turnover';
 
 /** How a possession ended. */
-export type DriveEnd = 'td' | 'downs' | 'pick' | 'punt' | 'clock';
+/** 'return-td': the receiving team took the punt back to the house. */
+export type DriveEnd =
+  | 'td'
+  | 'downs'
+  | 'pick'
+  | 'punt'
+  | 'clock'
+  | 'return-td';
 
 /** Between possessions, and at the final whistle. */
 export interface BreakCard {
@@ -96,6 +103,11 @@ export class Match {
    * it (world z, attacking +z).
    */
   changePossession(end: DriveEnd, endZ: number): void {
+    if (end === 'return-td') {
+      // The returners scored and kick off: the punting team receives.
+      this.startZ = OWN_25;
+      return;
+    }
     this.offense = other(this.offense);
     if (end === 'td' || end === 'clock') {
       this.startZ = OWN_25;
