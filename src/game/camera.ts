@@ -37,11 +37,15 @@ const DEF_LEAD = 7;
 // Defense: the rig rides behind the controlled defender and turns
 // to face the ball (the one place the camera yaws). Heavily
 // smoothed so it does not sway with every step.
-const DEF_CAM_BACK = 9;
-const DEF_CAM_HEIGHT = 4.2;
-const DEF_CAM_AHEAD = 6;
-const DEF_POS_FOLLOW = 3.2;
-const DEF_YAW_FOLLOW = 1.8;
+// Tight on position so the defender never leaves the frame and
+// stays large in the foreground; softer on the turn.
+const DEF_CAM_BACK = 6.2;
+const DEF_CAM_HEIGHT = 3.1;
+const DEF_CAM_AHEAD = 4.5;
+const DEF_POS_FOLLOW = 12;
+const DEF_YAW_FOLLOW = 2.6;
+// Moving: the rig eases back and up a little with speed.
+const DEF_SPEED_PULL = 0.05;
 /** Ball closer than this: keep the current heading. */
 const DEF_YAW_DEADZONE = 2.5;
 
@@ -65,6 +69,8 @@ export class MaddenCamera {
   private defZ = 0;
   private yaw = Math.PI;
   private defReady = false;
+  /** Smoothed defender speed, for the pull-back. */
+  private defSpeed = 0;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -119,6 +125,8 @@ export class MaddenCamera {
       return;
     }
     const kp = 1 - Math.exp(-dt * DEF_POS_FOLLOW);
+    const moved = Math.hypot(px - this.defX, pz - this.defZ) / Math.max(dt, 1e-3);
+    this.defSpeed = lerp(this.defSpeed, Math.min(moved, 9), 1 - Math.exp(-dt * 3));
     this.defX = lerp(this.defX, px, kp);
     this.defZ = lerp(this.defZ, pz, kp);
     const ky = 1 - Math.exp(-dt * DEF_YAW_FOLLOW);
@@ -233,7 +241,7 @@ export class MaddenCamera {
   private writeDefensePose(): void {
     const fx = Math.sin(this.yaw);
     const fz = Math.cos(this.yaw);
-    const z = this.zoom;
+    const z = this.zoom * (1 + this.defSpeed * DEF_SPEED_PULL);
     this.look.set(
       this.defX + fx * DEF_CAM_AHEAD,
       LOOK_Y,
