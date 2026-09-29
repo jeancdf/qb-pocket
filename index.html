@@ -36,6 +36,7 @@
       <div id="play-bar" class="play-bar">
         <button id="snap-btn" type="button">SNAP</button>
         <button id="reset-btn" type="button" class="ghost">RESET</button>
+        <button id="menu-btn" type="button" class="ghost">MENU</button>
         <p class="play-bar__hint">
           1–4 audible · M motion · ZQSD run · Shift sprint ·
           hold + release to throw · Space snap / juke
@@ -64,6 +65,21 @@
       </div>
 
       <div id="toast" class="toast" hidden></div>
+
+      <section id="menu" class="menu">
+        <div class="menu__inner">
+          <header class="menu__brand">
+            <p class="menu__kicker">American football</p>
+            <h1 class="menu__title">QB <span>POCKET</span></h1>
+            <p class="menu__tag">Lis la couverture. Lance. Gagne.</p>
+          </header>
+          <div id="menu-modes" class="menu__modes"></div>
+          <p class="menu__keys">
+            Espace snap · clic maintenu pour lancer · ZQSD courir ·
+            Shift sprint · Échap menu
+          </p>
+        </div>
+      </section>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

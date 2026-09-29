@@ -1,6 +1,7 @@
 import './style.css';
 import { FootballGame } from './game/game';
 import { Hud } from './game/hud';
+import { Menu } from './game/menu';
 import { ThrowMeter } from './game/throw-meter';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
@@ -12,6 +13,12 @@ const game = new FootballGame(canvas);
 window.__qb = game;
 const hud = new Hud();
 const meter = new ThrowMeter();
+const menu = new Menu();
+menu.onPick(() => {
+  hud.hidePlaybook();
+  game.reset();
+  paintHud();
+});
 game.onToast((msg, bad) => hud.toast(msg, bad));
 game.onOver((over) => hud.setResult(over));
 const ro = new ResizeObserver(() => game.resize());
@@ -24,6 +31,7 @@ snapBtn?.addEventListener('click', () => {
   game.snap();
   paintHud();
 });
+document.getElementById('menu-btn')?.addEventListener('click', openMenu);
 resetBtn?.addEventListener('click', () => {
   hud.hidePlaybook();
   game.reset();
@@ -54,7 +62,7 @@ canvas.addEventListener('pointermove', (ev) => {
 // Press on the grass to wind up, drag to aim, release to throw.
 // The longer the hold, the harder (and flatter) the pass.
 canvas.addEventListener('pointerdown', (ev) => {
-  if (ev.button !== 0) {
+  if (ev.button !== 0 || menu.isOpen()) {
     return;
   }
   game.beginChargeAtScreen(ev.clientX, ev.clientY);
@@ -68,6 +76,9 @@ canvas.addEventListener('pointerdown', (ev) => {
 const down = new Set<string>();
 
 window.addEventListener('keydown', (ev) => {
+  if (menu.isOpen()) {
+    return;
+  }
   if (ev.code === 'Space') {
     ev.preventDefault();
     if (game.phase === 'yac') {
@@ -101,7 +112,12 @@ window.addEventListener('keydown', (ev) => {
     }
   }
   if (ev.key === 'Escape') {
-    game.cancelCharge();
+    if (game.phase === 'play') {
+      game.cancelCharge();
+    } else {
+      openMenu();
+      return;
+    }
   }
   if (ev.key === 'r' || ev.key === 'R') {
     hud.hidePlaybook();
@@ -125,6 +141,15 @@ window.addEventListener('keyup', (ev) => {
   down.delete(ev.code);
   syncStick();
 });
+
+function openMenu(): void {
+  game.cancelCharge();
+  down.clear();
+  syncStick();
+  game.setSprint(false);
+  hud.hidePlaybook();
+  menu.open();
+}
 
 function syncStick(): void {
   // AZERTY ZQSD + QWERTY WASD. Camera is behind the QB looking
