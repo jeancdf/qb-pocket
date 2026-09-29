@@ -17,7 +17,9 @@ The camera sits low behind the QB, in line with the field
 The game opens on a title screen: pick a mode there (**LANCER** is
 the single practice drive, **MATCH** four 4-minute quarters against
 the CPU). **MENU** or Esc goes back to it. In a match, Space / SNAP
-moves on from each break card.
+moves on from each break card. When the CPU has the ball you play
+defense: the camera flips behind your defense, 1–7 picks the call,
+Tab (or C) takes the defender nearest the ball, ZQSD runs him.
 
 ## Controls
 
@@ -44,9 +46,10 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | `menu.ts` | Title screen and the list of game modes. |
 | `match.ts` | Match rules: score, game clock, quarters, halftime, change of possession (spot mirrored, offense always attacks +z). |
 | `match-flow.ts` | A match between snaps: break cards, who gets the ball next, CPU possessions. |
-| `opponent-sim.ts` | CPU possession resolved off-screen (until the defense mode takes over). |
+| `cpu-offense.ts` | CPU offense when the player defends: play call, QB progression and throw, ball carrier AI. |
+| `defense-control.ts` | Player on defense: call sheet (1–7), controlled defender (gold ring), switching, movement. |
 | `game.ts` | `FootballGame`: phases, inputs, charging and releasing a throw, drive results. Glue only; put new rules in a module below. |
-| `camera.ts` | The only code that moves the camera. Stays behind the QB, no side offset. |
+| `camera.ts` | The only code that moves the camera. Stays behind the QB, no side offset; on defense it flips behind the defense (looks -z). |
 | `yac.ts` | Ball carrier after the catch or a scramble: juke, pursuit, tackle. |
 | `pass-flight.ts` | Ball in the air: receiver break, catch / drop / breakup / pick. |
 | `throwing.ts` | Pure throw math: charge power, accuracy, flight time, catch contest. |

@@ -92,3 +92,21 @@ export function numberTexture(
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
+
+/**
+ * The player's team keeps the navy kit whichever unit is on the
+ * field: on defense, swap jersey / pants / helmet colours.
+ */
+export function wearKits(
+  mats: Record<Side, TeamMats>,
+  userSide: Side
+): void {
+  const home = userSide === 'offense' ? mats.offense : mats.defense;
+  const away = userSide === 'offense' ? mats.defense : mats.offense;
+  home.jersey.color.setHex(COLORS.navy);
+  home.pants.color.setHex(COLORS.silver);
+  home.helmet.color.setHex(COLORS.helmetOff);
+  away.jersey.color.setHex(COLORS.white);
+  away.pants.color.setHex(COLORS.navy);
+  away.helmet.color.setHex(COLORS.helmetDef);
+}

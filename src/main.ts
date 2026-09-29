@@ -96,6 +96,10 @@ window.addEventListener('keydown', (ev) => {
   if (ev.key === 'Shift') {
     game.setSprint(true);
   }
+  if (ev.key === 'Tab' || ev.key === 'c' || ev.key === 'C') {
+    ev.preventDefault();
+    game.switchPlayer();
+  }
   if (ev.key === 'h' || ev.key === 'H') {
     hud.togglePlaybook();
   }
@@ -220,6 +224,7 @@ function paintHud(): void {
   hud.setRead(game.readHint(), game.phase === 'presnap');
   hud.setCard(game.breakCard());
   hud.setClock(game.clockLine());
+  hud.setSide(game.isDefending());
 }
 
 paintHud();

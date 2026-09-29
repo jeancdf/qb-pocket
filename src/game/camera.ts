@@ -28,6 +28,12 @@ const FOLLOW = 3.8;
 const BALL_FOLLOW = 7;
 const BALL_LIFT = 0.6;
 const POCKET_BACK = 5;
+// Defense: the rig flips to the far side and looks back at the
+// offense (-z), a bit higher so the whole shell is in frame. The
+// subject sits DEF_LEAD yards on the defense side of the ball.
+const DEF_HEIGHT = 5.2;
+const DEF_BACK = 24;
+const DEF_LEAD = 7;
 
 export class MaddenCamera {
   private readonly cam: THREE.PerspectiveCamera;
@@ -42,6 +48,8 @@ export class MaddenCamera {
   private losZ = LOS_Z;
   private attached = false;
   private punch = false;
+  /** +1 behind the offense (looking +z), -1 behind the defense. */
+  private dir: 1 | -1 = 1;
 
   constructor(
     camera: THREE.PerspectiveCamera,
@@ -68,11 +76,25 @@ export class MaddenCamera {
     this.losZ = z;
   }
 
+  /** Which side the player is on: the rig goes behind that unit. */
+  setSide(side: 'offense' | 'defense'): void {
+    this.dir = side === 'offense' ? 1 : -1;
+  }
+
+  /** Where the rig centres itself for a spot on the field. */
+  private anchorZ(z: number): number {
+    return this.dir === 1 ? z : z + DEF_LEAD;
+  }
+
+  private presnapZ(): number {
+    return this.dir === 1 ? this.losZ - POCKET_BACK : this.losZ + DEF_LEAD;
+  }
+
   setPhase(phase: CamPhase): void {
     this.phase = phase;
     if (phase === 'presnap') {
       this.subjectX = 0;
-      this.subjectZ = this.losZ - POCKET_BACK;
+      this.subjectZ = this.presnapZ();
       this.ahead = LOOK_AHEAD;
       this.lift = 0;
     }
@@ -85,7 +107,7 @@ export class MaddenCamera {
     }
     const k = 1 - Math.exp(-dt * FOLLOW);
     this.subjectX = lerp(this.subjectX, qbX, k);
-    this.subjectZ = lerp(this.subjectZ, qbZ, k);
+    this.subjectZ = lerp(this.subjectZ, this.anchorZ(qbZ), k);
     this.lift = lerp(this.lift, 0, k);
     const extra = this.phase === 'throw' ? THROW_AHEAD : 0;
     this.ahead = lerp(this.ahead, LOOK_AHEAD + extra, k);
@@ -101,7 +123,7 @@ export class MaddenCamera {
     }
     const k = 1 - Math.exp(-dt * BALL_FOLLOW);
     this.subjectX = lerp(this.subjectX, x, k);
-    this.subjectZ = lerp(this.subjectZ, z, k);
+    this.subjectZ = lerp(this.subjectZ, this.anchorZ(z), k);
     this.lift = lerp(this.lift, Math.max(0, y) * BALL_LIFT, k);
     this.ahead = lerp(this.ahead, LOOK_AHEAD, k);
   }
@@ -116,7 +138,7 @@ export class MaddenCamera {
     this.zoom = 1;
     this.punch = false;
     this.subjectX = 0;
-    this.subjectZ = this.losZ - POCKET_BACK;
+    this.subjectZ = this.presnapZ();
     this.ahead = LOOK_AHEAD;
     this.lift = 0;
     this.writePose();
@@ -135,12 +157,15 @@ export class MaddenCamera {
   }
 
   private writePose(): void {
-    const lookZ = this.subjectZ + this.ahead;
+    const d = this.dir;
+    const height = d === 1 ? HEIGHT : DEF_HEIGHT;
+    const back = d === 1 ? BACK : DEF_BACK;
+    const lookZ = this.subjectZ + this.ahead * d;
     this.look.set(this.subjectX, LOOK_Y + this.lift, lookZ);
     this.cam.position.set(
       this.look.x,
-      this.look.y + HEIGHT * this.zoom,
-      this.look.z - BACK * this.zoom
+      this.look.y + height * this.zoom,
+      this.look.z - back * this.zoom * d
     );
     this.cam.lookAt(this.look);
   }

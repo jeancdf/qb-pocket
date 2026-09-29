@@ -15,20 +15,22 @@ import {
   type CoverLook
 } from './coverage-looks';
 import { CoverPlay, isCoverage, nearestEligible } from './coverage-play';
+import { callPlay, cpuAccuracy, CpuQb, CpuRunner } from './cpu-offense';
+import { DEF_CALLS, DefenseControl } from './defense-control';
 import { separatePlayers } from './collisions';
 import { Drive } from './drive';
 import type { BreakCard, DriveEnd, PlayEnd } from './match';
 import { MatchFlow } from './match-flow';
 import { GetOpen } from './get-open';
 import { buildWorld, type FieldSticks } from './field';
-import type { HudRow } from './hud';
+import type { CallItem, HudRow } from './hud';
 import { isPassRusher, LinePlay, passRushers } from './line-play';
-import { makeTeamMats } from './materials';
+import { makeTeamMats, wearKits, type TeamMats } from './materials';
 import { clamp, xzDist } from './math';
 import { PassFlight } from './pass-flight';
 import { beatId, readHint } from './play-hints';
 import { SMASH, THROW_ORDER } from './playbook';
-import { PLAYS, type OffPlay } from './plays';
+import { PLAYS } from './plays';
 import { handPos, PlayerActor } from './players';
 import { advancePoseClock } from './pose-blend';
 import { QbEyes } from './qb-eyes';
@@ -51,7 +53,7 @@ import {
   type ThrowSituation,
   type ThrowTarget
 } from './throwing';
-import type { CoverGrade, Phase, Vec2 } from './types';
+import type { CoverGrade, Phase, Side, Vec2 } from './types';
 import { YacRun, type JukeResult, type JukeState } from './yac';
 
 export interface PlaytestSnap {
@@ -122,6 +124,13 @@ export class FootballGame {
   private turnoverText = '';
   private toast?: (msg: string, bad: boolean) => void;
   private flow: MatchFlow | null = null;
+  private mats!: Record<Side, TeamMats>;
+  /** The player is the defense this possession (CPU has the ball). */
+  private defending = false;
+  private readonly defense = new DefenseControl();
+  private readonly cpuQb = new CpuQb(0.5);
+  private readonly cpuRun = new CpuRunner(0.5);
+  private skill = 0.5;
   private menuFn?: () => void;
 
   constructor(canvas: HTMLCanvasElement) {
@@ -136,7 +145,7 @@ export class FootballGame {
     this.aimMark = new AimMark(this.scene);
     this.ghosts = new RouteGhosts(this.scene);
     this.spawn();
-    this.yac = new YacRun(this.players, (m, b) => this.toast?.(m, b));
+    this.yac = new YacRun(this.players, (m, b) => this.say(m, b));
     this.line = new LinePlay(this.byId);
     this.cover = new CoverPlay(this.byId, this.eyes);
     this.huddle();
@@ -161,7 +170,27 @@ export class FootballGame {
   /** MATCH: four quarters against a CPU team (`skill` 0..1). */
   startMatch(skill: number): void {
     this.flow = new MatchFlow(skill);
+    this.skill = skill;
+    this.cpuQb.setSkill(skill);
+    this.cpuRun.setSkill(skill);
     this.newDrive(this.flow.match.startZ);
+  }
+
+  /** On defense this possession (the CPU has the ball). */
+  isDefending(): boolean {
+    return this.defending;
+  }
+
+  /** Tab: take the defender nearest the ball. */
+  switchPlayer(): void {
+    if (!this.defending) {
+      return;
+    }
+    const ball = this.yac.carrier ??
+      this.flight.aim ??
+      { x: this.ball.pos.x, z: this.ball.pos.z };
+    this.defense.switchNear(ball, this.controllable());
+    this.cover.setUser(this.defense.user?.def.id ?? null);
   }
 
   inMatch(): boolean {
@@ -195,6 +224,11 @@ export class FootballGame {
     this.setRoutes(false);
     this.eyes.reset();
     this.cover.startSnap(PLAYS[this.playIdx].pa ?? false);
+    if (this.defending) {
+      const first = this.beatId();
+      this.cpuQb.reset([first, ...THROW_ORDER.filter((id) => id !== first)]);
+      this.cpuRun.reset();
+    }
   }
 
   reset(): void {
@@ -208,12 +242,24 @@ export class FootballGame {
   }
 
   private newDrive(losZ: number): void {
+    const away = this.flow?.match.offense === 'away';
+    this.setSide(away ? 'defense' : 'offense');
     this.drive.startAt(losZ);
     this.playIdx = 0;
     this.yac.forget();
     this.flightPeak = 0;
     this.turnoverText = '';
     this.huddle();
+  }
+
+  private setSide(side: Side): void {
+    this.defending = side === 'defense';
+    wearKits(this.mats, side);
+    this.madden.setSide(side);
+    if (!this.defending) {
+      this.defense.take(null);
+      this.cover.setUser(null);
+    }
   }
 
   /** Break card on screen: next possession, CPU drive, or menu. */
@@ -229,6 +275,10 @@ export class FootballGame {
   /** Pre-snap audible. Indexes PLAYS (keys 1–9, 0). */
   selectPlay(i: number): void {
     if (this.phase !== 'presnap' || this.drive.over()) {
+      return;
+    }
+    if (this.defending) {
+      this.selectCall(i);
       return;
     }
     if (i < 0 || i >= PLAYS.length) {
@@ -249,7 +299,7 @@ export class FootballGame {
   }
 
   sendMotion(): void {
-    if (this.phase !== 'presnap' || this.drive.over()) {
+    if (this.phase !== 'presnap' || this.drive.over() || this.defending) {
       return;
     }
     this.motionOn = true;
@@ -268,7 +318,7 @@ export class FootballGame {
 
   /** Space with the ball in the open field: juke toward the stick. */
   juke(): void {
-    if (this.phase === 'yac') {
+    if (this.phase === 'yac' && !this.defending) {
       this.yac.requestJuke(Math.sign(this.stickX));
     }
   }
@@ -374,7 +424,7 @@ export class FootballGame {
   }
 
   previewAim(cx: number, cy: number): void {
-    if (this.phase !== 'play') {
+    if (this.phase !== 'play' || this.defending) {
       return;
     }
     const spot = this.groundAt(cx, cy);
@@ -404,7 +454,11 @@ export class FootballGame {
       separatePlayers(this.players, (a, b) => this.tackling(a, b));
     }
     if (this.phase === 'play') {
-      this.tickEyes(dt);
+      if (this.defending) {
+        this.tickCpuQb(dt);
+      } else {
+        this.tickEyes(dt);
+      }
     }
     this.ball.update(dt);
     if (this.ball.inAir) {
@@ -448,6 +502,9 @@ export class FootballGame {
   }
 
   hudRows(): HudRow[] {
+    if (this.defending) {
+      return [];
+    }
     return THROW_ORDER.map((id) => {
       const p = this.byId.get(id)!;
       return {
@@ -475,6 +532,10 @@ export class FootballGame {
   }
 
   readHint(): string {
+    if (this.defending) {
+      const form = PLAYS[this.playIdx].form;
+      return `Ils sortent en ${form}. 1–7 appel défensif · Tab change de joueur.`;
+    }
     return readHint(PLAYS[this.playIdx], this.look);
   }
 
@@ -508,13 +569,31 @@ export class FootballGame {
   }
 
   callSheet(): {
-    play: OffPlay;
+    play: CallItem;
     playIdx: number;
     cover: string;
-    plays: OffPlay[];
+    plays: CallItem[];
     motion: boolean;
     over: 'win' | 'loss' | null;
   } {
+    if (this.defending) {
+      // The CPU's play stays hidden: only its formation shows.
+      const form = PLAYS[this.playIdx].form;
+      const calls = DEF_CALLS.map((c) => ({
+        name: c.look.name,
+        beat: c.beat,
+        form: 'DÉFENSE',
+        chip: c.beat
+      }));
+      return {
+        play: { name: form, beat: '', form },
+        playIdx: this.defense.callIdx,
+        cover: this.look.name,
+        plays: calls,
+        motion: false,
+        over: null
+      };
+    }
     return {
       play: PLAYS[this.playIdx],
       playIdx: this.playIdx,
@@ -579,6 +658,9 @@ export class FootballGame {
   }
 
   statusText(): string {
+    if (this.defending) {
+      return this.defenseStatus();
+    }
     switch (this.phase) {
       case 'presnap':
         return this.drive.over()
@@ -605,6 +687,104 @@ export class FootballGame {
     return this.yac.status();
   }
 
+  private defenseStatus(): string {
+    switch (this.phase) {
+      case 'presnap':
+        return '1–7 appel · Tab change de joueur · Espace snap.';
+      case 'play':
+      case 'throw':
+      case 'yac':
+        return 'ZQSD ton joueur (anneau doré) · Shift sprint · Tab change.';
+      default:
+        return '';
+    }
+  }
+
+  /** Toasts read from the player's side: a stop is good news. */
+  private say(msg: string, bad: boolean): void {
+    this.toast?.(msg, this.defending ? !bad : bad);
+  }
+
+  /** Defenders the player may take: coverage men, not rushers. */
+  private controllable(): PlayerActor[] {
+    return this.defenders().filter((p) =>
+      this.cover.jobOf(p.def.id) !== undefined &&
+      !isPassRusher(p.def.id)
+    );
+  }
+
+  /** Keep the controlled man if he still has a coverage job. */
+  private pickUser(): void {
+    const pool = this.controllable();
+    const keep = this.defense.user;
+    let next = keep && pool.includes(keep) ? keep : null;
+    if (!next) {
+      for (const id of ['fs', 'mlb', 'ss', 'wlb', 'lcb']) {
+        next = pool.find((p) => p.def.id === id) ?? null;
+        if (next) {
+          break;
+        }
+      }
+    }
+    this.defense.take(next ?? pool[0] ?? null);
+    this.cover.setUser(this.defense.user?.def.id ?? null);
+  }
+
+  /** Defense call before the snap (keys 1–7). */
+  private selectCall(i: number): void {
+    if (!this.defense.setCall(i)) {
+      return;
+    }
+    this.look = this.defense.call().look;
+    this.cover.setLook(this.look);
+    this.line.setPackage(this.look.rush, this.look.spy ?? true);
+    this.line.reset();
+    this.applyDefense();
+    const los = this.drive.losZ;
+    for (const p of this.defenders()) {
+      p.align(los);
+    }
+    this.pickUser();
+  }
+
+  /** CPU quarterback: read the progression, then throw. */
+  private tickCpuQb(dt: number): void {
+    const qb = this.qb();
+    const eye = this.byId.get(this.cpuQb.eyesOn() ?? '');
+    if (eye) {
+      this.eyes.look(eye);
+    }
+    this.eyes.tick(dt, this.eligibles(), qb, true, null);
+    const defs = this.defenders();
+    const reads = this.eligibles().map((p) => ({
+      id: p.def.id,
+      grade: gradeReceiver(p, qb, defs),
+      dist: xzDist(qb, p)
+    }));
+    const call = this.cpuQb.tick(
+      dt,
+      reads,
+      this.pressure(),
+      qb,
+      this.drive.losZ
+    );
+    if (call?.kind === 'throw') {
+      const wr = this.byId.get(call.id);
+      if (wr) {
+        this.throwAt(this.leadReceiver(wr, call.power), call.power, 0);
+      }
+    } else if (call?.kind === 'away') {
+      this.throwAt(call.spot, 0.6, 0);
+    }
+  }
+
+  /** Stick in world axes: the defense camera looks down -z. */
+  private userStick(): Vec2 {
+    return this.defending
+      ? { x: -this.stickX, z: -this.stickZ }
+      : { x: this.stickX, z: this.stickZ };
+  }
+
   /**
    * The QB's eyes: cursor hover, or the receiver he is winding
    * up on. Play-action turns him to the RB for the fake first.
@@ -629,7 +809,7 @@ export class FootballGame {
   }
 
   private canThrow(): boolean {
-    return this.phase === 'play' &&
+    return this.phase === 'play' && !this.defending &&
       this.qb().z <= this.drive.losZ + 0.4;
   }
 
@@ -672,8 +852,11 @@ export class FootballGame {
       target,
       power,
       pressure: this.pressure(),
-      moving: clamp(Math.hypot(this.stickX, this.stickZ), 0, 1),
-      overHold: over
+      moving: this.defending
+        ? 0
+        : clamp(Math.hypot(this.stickX, this.stickZ), 0, 1),
+      overHold: over,
+      accuracy: this.defending ? cpuAccuracy(this.skill) : undefined
     };
   }
 
@@ -741,12 +924,7 @@ export class FootballGame {
       const line = p.def.pos === 'OL' || p.def.pos === 'DL';
       const db = isCoverage(p.def.pos);
       if (this.phase === 'yac' && carrier === p) {
-        this.yac.move(
-          dt,
-          qb,
-          { x: this.stickX, z: this.stickZ },
-          this.sprint
-        );
+        this.moveCarrier(dt, p);
         continue;
       }
       if (this.phase === 'yac' && this.yac.tackler === p) {
@@ -773,6 +951,10 @@ export class FootballGame {
           continue;
         }
       }
+      if (p === this.defense.user && (live || this.phase === 'yac')) {
+        this.defense.move(dt, this.userStick(), this.sprint);
+        continue;
+      }
       if (live && this.open.wants(p)) {
         this.workOpen(p, dt);
         continue;
@@ -795,6 +977,24 @@ export class FootballGame {
       this.cover.chaseCarrier(dt, carrier, diving);
       this.line.pursue(dt, carrier, diving);
     }
+  }
+
+  /** Player steers his own carrier; the CPU runs its own. */
+  private moveCarrier(dt: number, p: PlayerActor): void {
+    if (!this.defending) {
+      this.yac.move(
+        dt,
+        this.qb(),
+        { x: this.stickX, z: this.stickZ },
+        this.sprint
+      );
+      return;
+    }
+    const run = this.cpuRun.tick(dt, p, this.defenders());
+    if (run.juke !== 0) {
+      this.yac.requestJuke(run.juke);
+    }
+    this.yac.move(dt, this.qb(), run.stick, true);
   }
 
   private endYac(): void {
@@ -833,7 +1033,12 @@ export class FootballGame {
     this.charge = null;
     this.motionOn = false;
     this.motionIdx = 0;
-    this.look = pickLook();
+    if (this.defending) {
+      this.playIdx = callPlay(PLAYS, this.skill);
+      this.look = this.defense.call().look;
+    } else {
+      this.look = pickLook();
+    }
     this.cover.setLook(this.look);
     this.line.setPackage(this.look.rush, this.look.spy ?? true);
     this.applyOffense();
@@ -851,11 +1056,15 @@ export class FootballGame {
     this.sticks.fd.position.z = this.drive.lineToGain();
     this.rebuildGhosts();
     this.placeBall();
-    this.setRoutes(true);
+    this.setRoutes(!this.defending);
+    if (this.defending) {
+      this.pickUser();
+    }
   }
 
   private spawn(): void {
     const mats = makeTeamMats();
+    this.mats = mats;
     for (const def of SMASH) {
       const actor = new PlayerActor(def, mats[def.side]);
       this.players.push(actor);
@@ -887,7 +1096,8 @@ export class FootballGame {
   }
 
   private grade(): void {
-    const show = this.phase === 'play' || this.phase === 'throw';
+    const show = !this.defending &&
+      (this.phase === 'play' || this.phase === 'throw');
     const defs = this.defenders();
     const qb = this.qb();
     for (const p of this.players) {
@@ -901,7 +1111,9 @@ export class FootballGame {
   /** A sack needs a rusher to actually reach the QB: no pocket timer. */
   private checkSack(): void {
     const qb = this.qb();
-    for (const id of passRushers()) {
+    const user = this.defense.user?.def.id;
+    const hunters = user ? [...passRushers(), user] : passRushers();
+    for (const id of hunters) {
       const d = this.byId.get(id);
       if (d && xzDist(qb, d) < SACK_RANGE) {
         this.deadSack(d);
@@ -924,7 +1136,7 @@ export class FootballGame {
         return;
       case 'tipped':
         this.aimMark.hide();
-        this.toast?.(r.msg, true);
+        this.say(r.msg, true);
         return;
       case 'pick':
         this.intercept(r.db);
@@ -949,7 +1161,8 @@ export class FootballGame {
       true,
       'turnover',
       'pick',
-      'turnover'
+      'turnover',
+      db.z
     );
   }
 
@@ -960,14 +1173,14 @@ export class FootballGame {
     this.aimMark.hide();
     if (dive) {
       // Laid out on the grass: the play ends where he lands.
-      this.toast?.('DIVING CATCH', false);
+      this.say('DIVING CATCH', false);
       this.endYac();
       return;
     }
     wr.lockAnim('catch', 0.32);
     this.phase = 'yac';
     this.madden.setPhase('throw');
-    this.toast?.('COMPLETE', false);
+    this.say('COMPLETE', false);
   }
 
   private deadIncomp(msg: string): void {
@@ -1000,17 +1213,18 @@ export class FootballGame {
     bad: boolean,
     phase: Phase,
     end: DriveEnd,
-    play: PlayEnd
+    play: PlayEnd,
+    endZ = this.drive.losZ
   ): void {
     this.phase = phase;
     this.whistleT = 0;
     this.madden.setPhase('dead');
     this.aimMark.hide();
     this.setRoutes(false);
-    this.toast?.(msg, bad);
+    this.say(msg, bad);
     if (this.flow) {
       const clock = this.flow.playOver(play);
-      this.flow.homeDriveOver(end, this.drive.losZ, clock);
+      this.flow.driveOver(end, endZ, clock);
     }
   }
 
@@ -1020,13 +1234,13 @@ export class FootballGame {
     this.madden.setPhase('dead');
     this.aimMark.hide();
     this.setRoutes(false);
-    this.toast?.(msg, bad);
+    this.say(msg, bad);
     const clock = this.flow?.playOver(play) ?? 'none';
     if (clock !== 'none') {
       // Quarter 2 or 4 ran out on this snap: the possession stops.
       this.drive.turnover();
       this.phase = 'turnover';
-      this.flow?.homeDriveOver('clock', this.drive.losZ, clock);
+      this.flow?.driveOver('clock', this.drive.losZ, clock);
     }
   }
 
@@ -1127,7 +1341,7 @@ export class FootballGame {
   }
 
   private scrambling(): boolean {
-    return Math.abs(this.stickX) + Math.abs(this.stickZ) > 0.2;
+    return !this.defending && Math.abs(this.stickX) + Math.abs(this.stickZ) > 0.2;
   }
 
   private startQbRun(): void {
@@ -1136,7 +1350,7 @@ export class FootballGame {
     this.phase = 'yac';
     this.ball.hold(qb.rig.rightHand);
     this.madden.setPhase('throw');
-    this.toast?.('SCRAMBLE', false);
+    this.say('SCRAMBLE', false);
   }
 
   private rebuildGhosts(): void {

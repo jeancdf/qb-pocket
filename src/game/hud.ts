@@ -1,6 +1,14 @@
 import type { CoverGrade } from './types';
 import type { BreakCard } from './match';
-import type { OffPlay } from './plays';
+
+/** A line of the call sheet: an offensive play or a defensive call. */
+export interface CallItem {
+  name: string;
+  beat: string;
+  form: string;
+  /** Chip under the name; defaults to "vs <beat>". */
+  chip?: string;
+}
 
 export interface HudRow {
   id: string;
@@ -34,6 +42,8 @@ export class Hud {
   private clockEl: HTMLElement;
   private resultHint: HTMLElement;
   private resetBtn: HTMLElement;
+  private barHint: HTMLElement;
+  private readonly offenseHint: string;
   private bookOpen = false;
   private toastTimer: number | null = null;
 
@@ -60,6 +70,8 @@ export class Hud {
     this.clockEl = el('game-clock');
     this.resultHint = el('result-hint');
     this.resetBtn = el('reset-btn');
+    this.barHint = el('bar-hint');
+    this.offenseHint = this.barHint.textContent ?? '';
     this.playbook.hidden = true;
   }
 
@@ -118,6 +130,13 @@ export class Hud {
     this.awayEl.textContent = String(away);
   }
 
+  /** Key help under the SNAP button, per side of the ball. */
+  setSide(defending: boolean): void {
+    this.barHint.textContent = defending
+      ? '1–7 appel · Tab change de joueur · ZQSD déplace · Shift sprint · Espace snap'
+      : this.offenseHint;
+  }
+
   /** Match clock; empty hides it (practice). */
   setClock(line: string): void {
     this.clockEl.hidden = line === '';
@@ -131,7 +150,7 @@ export class Hud {
   }
 
   setCall(
-    plays: OffPlay[],
+    plays: CallItem[],
     idx: number,
     cover: string,
     presnap: boolean
@@ -152,7 +171,7 @@ export class Hud {
       btn.append(`${(i + 1) % 10} ${p.name}`);
       const beat = document.createElement('span');
       beat.className = 'beat';
-      beat.textContent = `vs ${p.beat}`;
+      beat.textContent = p.chip ?? `vs ${p.beat}`;
       btn.append(beat);
       this.audibles.append(btn);
     });

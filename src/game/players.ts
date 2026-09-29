@@ -168,6 +168,13 @@ export class PlayerActor {
     this.ringMat.opacity = grade === 'idle' ? 0 : 0.72;
   }
 
+  /** Gold ring under the defender the player controls. */
+  setMarked(on: boolean): void {
+    this.cover = 'idle';
+    this.ringMat.color.setHex(on ? 0xe8c547 : RING_COL.idle);
+    this.ringMat.opacity = on ? 0.95 : 0;
+  }
+
   /** Force a pose. Call after update() to override auto locomotion. */
   setAnim(kind: AnimKind, t: number, speed: number): void {
     poseRig(this.rig, kind, t, speed);

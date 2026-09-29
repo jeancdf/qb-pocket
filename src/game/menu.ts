@@ -23,7 +23,7 @@ const CARDS: ModeCard[] = [
     kicker: 'Match rapide',
     title: 'MATCH',
     blurb:
-      'Quatre quart-temps, possessions qui alternent, chrono et score.',
+      'Attaque et défense : l’IA joue ses plays quand tu défends. Chrono et score.',
     ready: true
   },
   {

@@ -48,6 +48,8 @@ export interface ThrowSituation {
   moving: number;
   /** Seconds past CHARGE_FULL the button was held. */
   overHold: number;
+  /** Scatter multiplier for a CPU passer (1 = the player). */
+  accuracy?: number;
 }
 
 /** Hold time → power in 0..1 (eased so taps stay soft). */
@@ -87,6 +89,7 @@ export function spreadFor(s: ThrowSituation): number {
   r *= 1 + s.pressure * 1.7;
   r *= 1 + s.moving * 0.85;
   r += s.overHold * 2.2;
+  r *= s.accuracy ?? 1;
   return clamp(r, 0.2, 6);
 }
 

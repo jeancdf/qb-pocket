@@ -201,6 +201,8 @@ export class CoverPlay {
   private throwT = 0;
   private throwRead: EyeRead = 'neutral';
   private targetId: string | null = null;
+  /** Defender the player runs himself: the AI leaves him alone. */
+  private userId: string | null = null;
 
   constructor(byId: Map<string, PlayerActor>, eyes?: QbEyes) {
     this.byId = byId;
@@ -238,6 +240,10 @@ export class CoverPlay {
     this.losZ = z;
   }
 
+  setUser(id: string | null): void {
+    this.userId = id;
+  }
+
   setLook(look: CoverLook): void {
     this.jobs = look.jobs;
     this.matches.clear();
@@ -247,7 +253,7 @@ export class CoverPlay {
   cover(dt: number): void {
     this.snapT += dt;
     for (const job of this.jobs) {
-      if (isPassRusher(job.id)) {
+      if (isPassRusher(job.id) || job.id === this.userId) {
         continue;
       }
       const db = this.byId.get(job.id);
@@ -269,7 +275,7 @@ export class CoverPlay {
   ): void {
     this.throwT += dt;
     for (const job of this.jobs) {
-      if (isPassRusher(job.id)) {
+      if (isPassRusher(job.id) || job.id === this.userId) {
         continue;
       }
       const db = this.byId.get(job.id);
@@ -359,7 +365,7 @@ export class CoverPlay {
     skip: (p: PlayerActor) => boolean = () => false
   ): void {
     for (const job of this.jobs) {
-      if (isPassRusher(job.id)) {
+      if (isPassRusher(job.id) || job.id === this.userId) {
         continue;
       }
       const db = this.byId.get(job.id);

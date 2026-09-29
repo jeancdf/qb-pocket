@@ -4,14 +4,13 @@ import {
   type DriveEnd,
   type PlayEnd
 } from './match';
-import { simulateDrive } from './opponent-sim';
 
 export type FlowNext =
   | { kind: 'drive'; startZ: number }
   | { kind: 'wait' }
   | { kind: 'menu' };
 
-type Step = 'play' | 'cpu' | 'home' | 'menu';
+type Step = 'play' | 'next' | 'menu';
 
 const HOME_END: Record<DriveEnd, string> = {
   td: 'TOUCHDOWN',
@@ -21,17 +20,18 @@ const HOME_END: Record<DriveEnd, string> = {
   clock: 'FIN DE LA MI-TEMPS'
 };
 
-const CPU_END: Record<DriveEnd, string> = {
-  td: 'TOUCHDOWN',
-  downs: 'ARRÊTÉ SUR 4E TENTATIVE',
-  pick: 'INTERCEPTION',
-  punt: 'PUNT',
+const AWAY_END: Record<DriveEnd, string> = {
+  td: 'TOUCHDOWN ADVERSE',
+  downs: 'STOPPÉS SUR 4E TENTATIVE',
+  pick: 'INTERCEPTION !',
+  punt: 'PUNT ADVERSE',
   clock: 'FIN DE LA MI-TEMPS'
 };
 
 /**
- * One match between snaps: who gets the ball next, what the
- * break card says, and the CPU possessions (simulated for now).
+ * One match between snaps: who gets the ball next and what the
+ * break card says. Both possessions are played: the player is
+ * the offense when home has the ball, the defense otherwise.
  */
 export class MatchFlow {
   readonly match = new Match();
@@ -39,42 +39,41 @@ export class MatchFlow {
   private step: Step = 'play';
 
   /** `skill` 0..1: how good the CPU team is. */
-  constructor(private readonly skill: number) {}
+  constructor(readonly skill: number) {}
 
-  /** A player snap is dead: run the clock. */
+  /** A snap is dead: run the clock. */
   playOver(end: PlayEnd): 'none' | 'half' | 'final' {
     return this.match.afterPlay(end);
   }
 
-  /** The player's possession is over (score, turnover, clock). */
-  homeDriveOver(
+  /** The possession is over (score, turnover, clock). */
+  driveOver(
     end: DriveEnd,
     endZ: number,
     clock: 'none' | 'half' | 'final'
   ): void {
     const m = this.match;
+    const team = m.offense;
     if (end === 'td') {
-      m.addTd('home');
+      m.addTd(team);
     }
-    const head = HOME_END[end];
+    const head = team === 'home' ? HOME_END[end] : AWAY_END[end];
+    // Good news for the player: their score, or a stop.
+    const good = team === 'home' ? end === 'td' : end !== 'td';
     if (clock === 'final' || m.finished) {
-      this.final();
+      this.card = m.finalCard();
+      this.step = 'menu';
       return;
     }
     if (clock === 'half') {
       m.openSecondHalf();
-      this.show(head, 'MI-TEMPS', "Espace — l'adversaire reçoit", false);
-      this.step = 'cpu';
+      this.show(head, 'MI-TEMPS', this.nextHint(), false);
+      this.step = 'next';
       return;
     }
     m.changePossession(end, endZ);
-    this.show(
-      head,
-      this.scoreLine(),
-      "Espace — l'adversaire a le ballon",
-      end !== 'td'
-    );
-    this.step = 'cpu';
+    this.show(head, this.scoreLine(), this.nextHint(), !good);
+    this.step = 'next';
   }
 
   /** Space / SNAP on a break card. */
@@ -82,43 +81,18 @@ export class MatchFlow {
     if (this.step === 'menu') {
       return { kind: 'menu' };
     }
-    if (this.step === 'home') {
+    if (this.step === 'next') {
       this.card = null;
       this.step = 'play';
       return { kind: 'drive', startZ: this.match.startZ };
     }
-    if (this.step === 'cpu') {
-      this.runCpuDrive();
-    }
     return { kind: 'wait' };
   }
 
-  private runCpuDrive(): void {
-    const m = this.match;
-    const sim = simulateDrive(m.startZ, this.skill);
-    if (sim.end === 'td') {
-      m.addTd('away');
-    }
-    const clock = m.burn(sim.seconds);
-    const head = `ADVERSAIRE · ${CPU_END[sim.end]} · ${sim.plays} JEUX`;
-    if (clock === 'final' || m.finished) {
-      this.final();
-      return;
-    }
-    if (clock === 'half') {
-      m.openSecondHalf();
-      this.show(head, 'MI-TEMPS', "Espace — l'adversaire reçoit", false);
-      this.step = 'cpu';
-      return;
-    }
-    m.changePossession(sim.end, sim.endZ);
-    this.show(head, this.scoreLine(), 'Espace — à toi', sim.end === 'td');
-    this.step = 'home';
-  }
-
-  private final(): void {
-    this.card = this.match.finalCard();
-    this.step = 'menu';
+  private nextHint(): string {
+    return this.match.offense === 'home'
+      ? 'Espace — à toi en attaque'
+      : 'Espace — en défense';
   }
 
   private show(
