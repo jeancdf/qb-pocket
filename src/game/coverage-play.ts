@@ -203,6 +203,8 @@ export class CoverPlay {
   private targetId: string | null = null;
   /** Defender the player runs himself: the AI leaves him alone. */
   private userId: string | null = null;
+  /** Coverage speed scale; the match difficulty moves it. */
+  private pace = COVER_SPEED_SCALE;
 
   constructor(byId: Map<string, PlayerActor>, eyes?: QbEyes) {
     this.byId = byId;
@@ -242,6 +244,11 @@ export class CoverPlay {
 
   setUser(id: string | null): void {
     this.userId = id;
+  }
+
+  /** Difficulty 0..1 (0.5 = the tuned default). */
+  setSkill(skill: number): void {
+    this.pace = COVER_SPEED_SCALE + (skill - 0.5) * 0.14;
   }
 
   setLook(look: CoverLook): void {
@@ -355,7 +362,7 @@ export class CoverPlay {
    * juke can still win; floor 6.85 so a trailer can still finish.
    */
   private pursuitSpeed(job: Job): number {
-    return clamp(job.spd * COVER_SPEED_SCALE + 0.85, 6.85, 7.25);
+    return clamp(job.spd * this.pace + 0.85, 6.85, 7.25);
   }
 
   /** After the catch, DBs/LBs run to the ball carrier. */
@@ -395,7 +402,7 @@ export class CoverPlay {
     let shade = this.shade(job, receiver);
     shade = this.readEyes(db, job, shade);
     shade = this.sellFake(db, job, shade);
-    db.chase(shade, dt, job.spd * COVER_SPEED_SCALE * speedFactor);
+    db.chase(shade, dt, job.spd * this.pace * speedFactor);
     this.keepEyesOnPlay(db, receiver);
   }
 
@@ -423,7 +430,7 @@ export class CoverPlay {
       x: future.x + inside * job.levX,
       z: Math.max(this.losZ + 0.6, future.z + cushion)
     };
-    db.chase(to, dt, job.spd * COVER_SPEED_SCALE * speedFactor);
+    db.chase(to, dt, job.spd * this.pace * speedFactor);
   }
 
   /**

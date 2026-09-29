@@ -16,7 +16,7 @@ const CARDS: ModeCard[] = [
     title: 'CARRIÈRE',
     blurb:
       'Une mini saison : chaque adversaire est plus fort que le précédent.',
-    ready: false
+    ready: true
   },
   {
     mode: 'match',
@@ -41,6 +41,7 @@ export class Menu {
   private readonly root: HTMLElement;
   private readonly modes: HTMLElement;
   private pick?: (mode: GameMode) => void;
+  private careerLine?: () => { kicker: string; blurb: string };
 
   constructor() {
     this.root = el('menu');
@@ -61,11 +62,18 @@ export class Menu {
     this.pick = fn;
   }
 
+  /** Career progress shown on its card, read each time the menu opens. */
+  showCareer(fn: () => { kicker: string; blurb: string }): void {
+    this.careerLine = fn;
+    this.render();
+  }
+
   isOpen(): boolean {
     return !this.root.hidden;
   }
 
   open(): void {
+    this.render();
     this.root.hidden = false;
     document.body.classList.add('in-menu');
   }
@@ -77,7 +85,9 @@ export class Menu {
 
   private render(): void {
     this.modes.replaceChildren(
-      ...CARDS.map((card) => {
+      ...CARDS.map((base) => {
+        const line = base.mode === 'career' ? this.careerLine?.() : undefined;
+        const card = line ? { ...base, ...line } : base;
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'mode-card';

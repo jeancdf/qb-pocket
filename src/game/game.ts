@@ -20,7 +20,7 @@ import { DEF_CALLS, DefenseControl } from './defense-control';
 import { separatePlayers } from './collisions';
 import { Drive } from './drive';
 import type { BreakCard, DriveEnd, PlayEnd } from './match';
-import { MatchFlow } from './match-flow';
+import { MatchFlow, type MatchOptions } from './match-flow';
 import { GetOpen } from './get-open';
 import { buildWorld, type FieldSticks } from './field';
 import type { CallItem, HudRow } from './hud';
@@ -178,15 +178,30 @@ export class FootballGame {
   /** LANCER: the single practice drive from the 10. */
   startPractice(): void {
     this.flow = null;
+    this.setSkill(0.5);
     this.reset();
   }
 
-  /** MATCH: four quarters against a CPU team (`skill` 0..1). */
-  startMatch(skill: number): void {
-    this.flow = new MatchFlow(skill);
+  private setSkill(skill: number): void {
     this.skill = skill;
     this.cpuQb.setSkill(skill);
     this.cpuRun.setSkill(skill);
+  }
+
+  /** A banner outside a play (match intro). */
+  toastNow(msg: string): void {
+    this.toast?.(msg, false);
+  }
+
+  /** Scorebug names: the player's team and the CPU's. */
+  teamTags(): { home: string; away: string } {
+    return { home: 'HOME', away: this.flow?.opts.awayTag ?? 'AWAY' };
+  }
+
+  /** MATCH: four quarters against a CPU team (`skill` 0..1). */
+  startMatch(skill: number, opts: MatchOptions = {}): void {
+    this.flow = new MatchFlow(skill, opts);
+    this.setSkill(skill);
     this.newDrive(this.flow.match.startZ);
   }
 
@@ -298,6 +313,10 @@ export class FootballGame {
     this.defending = side === 'defense';
     wearKits(this.mats, side);
     this.madden.setSide(side);
+    // The CPU's units play at the match difficulty, the player's at 0.5.
+    const cpuUnits = this.defending ? 0.5 : this.skill;
+    this.cover.setSkill(cpuUnits);
+    this.line.setSkill(cpuUnits);
     if (!this.defending) {
       this.defense.take(null);
       this.cover.setUser(null);

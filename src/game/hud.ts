@@ -125,6 +125,11 @@ export class Hud {
     this.yardsEl.textContent = `${yards} YDS`;
   }
 
+  setTeams(home: string, away: string): void {
+    el('home-tag').textContent = home;
+    el('away-tag').textContent = away;
+  }
+
   setScore(home: number, away: number): void {
     this.homeEl.textContent = String(home);
     this.awayEl.textContent = String(away);

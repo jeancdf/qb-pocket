@@ -16,7 +16,9 @@ The camera sits low behind the QB, in line with the field
 
 The game opens on a title screen: pick a mode there (**LANCER** is
 the single practice drive, **MATCH** four 4-minute quarters against
-the CPU). **MENU** or Esc goes back to it. In a match, Space / SNAP
+the CPU, **CARRIÈRE** five matches against ever better teams: the
+difficulty drives the CPU QB's reads and accuracy, its runner, its
+coverage speed and how fast its pass rush wins). **MENU** or Esc goes back to it. In a match, Space / SNAP
 moves on from each break card. When the CPU has the ball you play
 defense: the camera flips behind your defense, 1–7 picks the call,
 Tab (or C) takes the defender nearest the ball, ZQSD runs him.
@@ -48,6 +50,7 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | File | What it owns |
 | --- | --- |
 | `menu.ts` | Title screen and the list of game modes. |
+| `career.ts` | CARRIÈRE: 5 opponents of rising difficulty, win to advance, progress in localStorage. |
 | `match.ts` | Match rules: score, game clock, quarters, halftime, change of possession (spot mirrored, offense always attacks +z). |
 | `match-flow.ts` | A match between snaps: break cards, who gets the ball next, CPU possessions. |
 | `run-play.ts` | Run plays: QB path per play and the handoff moment (then the RB is a normal carrier). |

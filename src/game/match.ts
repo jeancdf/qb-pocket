@@ -126,7 +126,7 @@ export class Match {
     return this.home < this.away ? 'loss' : 'tie';
   }
 
-  finalCard(): BreakCard {
+  finalCard(hint = 'Espace — retour au menu'): BreakCard {
     const out = this.outcome();
     const title = out === 'win'
       ? 'VICTOIRE'
@@ -134,7 +134,7 @@ export class Match {
     return {
       kicker: `FIN DU MATCH · ${this.home} – ${this.away}`,
       title,
-      hint: 'Espace — retour au menu',
+      hint,
       bad: out !== 'win'
     };
   }

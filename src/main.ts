@@ -1,6 +1,7 @@
 import './style.css';
 import { FootballGame } from './game/game';
 import { Hud } from './game/hud';
+import { Career } from './game/career';
 import { Menu } from './game/menu';
 import { ThrowMeter } from './game/throw-meter';
 
@@ -14,15 +15,37 @@ window.__qb = game;
 const hud = new Hud();
 const meter = new ThrowMeter();
 const menu = new Menu();
+const career = new Career();
+menu.showCareer(() => career.summary());
 menu.onPick((mode) => {
   hud.hidePlaybook();
   if (mode === 'practice') {
     game.startPractice();
-  } else {
+  } else if (mode === 'match') {
     game.startMatch(0.5);
+  } else {
+    startCareerMatch();
   }
   paintHud();
 });
+
+function startCareerMatch(): void {
+  const opp = career.opponent();
+  const no = career.matchNo();
+  game.startMatch(opp.skill, {
+    awayTag: opp.tag,
+    finalHint: (out) => {
+      if (out !== 'win') {
+        return `Espace — il faut battre ${opp.name} pour avancer`;
+      }
+      return no >= 5
+        ? 'CHAMPION ! Espace — retour au menu'
+        : `Match ${no}/5 gagné · Espace — retour au menu`;
+    },
+    onFinal: (out) => career.finish(out)
+  });
+  game.toastNow(`MATCH ${no}/5 · ${opp.tag}`);
+}
 game.onToast((msg, bad) => hud.toast(msg, bad));
 game.onMenu(() => openMenu());
 const ro = new ResizeObserver(() => game.resize());
@@ -223,6 +246,8 @@ function paintHud(): void {
     game.yardsLeft()
   );
   hud.setScore(game.score().home, game.score().away);
+  const tags = game.teamTags();
+  hud.setTeams(tags.home, tags.away);
   hud.setCall(
     call.plays,
     call.playIdx,

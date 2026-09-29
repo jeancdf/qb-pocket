@@ -103,6 +103,8 @@ export class LinePlay {
   private spy = true;
   /** A handoff happened: blocks hold, then the DL pursue. */
   private running = false;
+  /** Shed-time scale for the rush; the match difficulty moves it. */
+  private shedScale = 1;
   private runT = 0;
 
   constructor(byId: Map<string, PlayerActor>) {
@@ -122,6 +124,11 @@ export class LinePlay {
   setPackage(blitz: string[] | undefined, spy: boolean): void {
     this.blitz = blitz;
     this.spy = spy;
+  }
+
+  /** Difficulty 0..1 (0.5 = the tuned default): how fast DL win. */
+  setSkill(skill: number): void {
+    this.shedScale = 1.3 - skill * 0.6;
   }
 
   /** Clears locks and picks 1–2 rushers for this snap. */
@@ -186,8 +193,8 @@ export class LinePlay {
     const dt = Math.random() < 0.5 ? 'ldt' : 'rdt';
     for (const m of this.matches) {
       const id = m.dl.def.id;
-      m.shedAt = id === edge ? edgeShed()
-        : id === dt ? interiorShed()
+      m.shedAt = id === edge ? edgeShed() * this.shedScale
+        : id === dt ? interiorShed() * this.shedScale
         : Number.POSITIVE_INFINITY;
     }
     const blitz = this.blitz ??

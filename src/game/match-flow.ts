@@ -12,6 +12,15 @@ export type FlowNext =
 
 type Step = 'play' | 'next' | 'menu';
 
+export interface MatchOptions {
+  /** Short name on the scorebug. */
+  awayTag?: string;
+  /** Line under the final score. */
+  finalHint?: (outcome: 'win' | 'loss' | 'tie') => string;
+  /** Called once when the final whistle blows. */
+  onFinal?: (outcome: 'win' | 'loss' | 'tie') => void;
+}
+
 const HOME_END: Record<DriveEnd, string> = {
   td: 'TOUCHDOWN',
   downs: 'TURNOVER ON DOWNS',
@@ -39,7 +48,10 @@ export class MatchFlow {
   private step: Step = 'play';
 
   /** `skill` 0..1: how good the CPU team is. */
-  constructor(readonly skill: number) {}
+  constructor(
+    readonly skill: number,
+    readonly opts: MatchOptions = {}
+  ) {}
 
   /** A snap is dead: run the clock. */
   playOver(end: PlayEnd): 'none' | 'half' | 'final' {
@@ -61,8 +73,10 @@ export class MatchFlow {
     // Good news for the player: their score, or a stop.
     const good = team === 'home' ? end === 'td' : end !== 'td';
     if (clock === 'final' || m.finished) {
-      this.card = m.finalCard();
+      const out = m.outcome();
+      this.card = m.finalCard(this.opts.finalHint?.(out));
       this.step = 'menu';
+      this.opts.onFinal?.(out);
       return;
     }
     if (clock === 'half') {
