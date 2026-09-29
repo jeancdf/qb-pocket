@@ -591,3 +591,32 @@ body.in-menu .toast {
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.08em;
 }
+
+.def-chip {
+  position: absolute;
+  z-index: 5;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  margin: 0;
+  padding: 8px 16px;
+  border-left: 4px solid var(--gold);
+  background: rgba(7, 16, 24, 0.72);
+  color: var(--paper);
+  font-family: "Barlow Condensed", sans-serif;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: center;
+  pointer-events: none;
+}
+
+.def-chip[hidden] {
+  display: none;
+}
+
+body.in-menu .def-chip {
+  visibility: hidden;
+}

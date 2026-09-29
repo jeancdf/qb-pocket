@@ -258,6 +258,7 @@ function paintHud(): void {
   hud.setCard(game.breakCard());
   hud.setClock(game.clockLine());
   hud.setSide(game.isDefending());
+  hud.setDefChip(game.defenseChip());
 }
 
 paintHud();

@@ -205,6 +205,15 @@ export class FootballGame {
     this.newDrive(this.flow.match.startZ);
   }
 
+  /** Always-on help while defending: who you control and the keys. */
+  defenseChip(): string | null {
+    if (!this.defending || this.drive.over()) {
+      return null;
+    }
+    const who = this.defense.label();
+    return `Tu joues ${who} (flèche dorée) · ZQSD bouger · Shift sprint · Tab / C changer de joueur`;
+  }
+
   /** On defense this possession (the CPU has the ball). */
   isDefending(): boolean {
     return this.defending;
@@ -1038,6 +1047,10 @@ export class FootballGame {
       }
       if (p === this.defense.user && (live || this.phase === 'yac')) {
         this.defense.move(dt, this.userStick(), this.sprint);
+        continue;
+      }
+      if (p === this.defense.user && this.phase === 'presnap') {
+        this.defense.shift(dt, this.userStick(), this.drive.losZ);
         continue;
       }
       if (live && this.open.wants(p)) {

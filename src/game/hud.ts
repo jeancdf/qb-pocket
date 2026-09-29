@@ -125,6 +125,13 @@ export class Hud {
     this.yardsEl.textContent = `${yards} YDS`;
   }
 
+  /** Defense help strip; null hides it. */
+  setDefChip(text: string | null): void {
+    const chip = el('def-chip');
+    chip.hidden = text === null;
+    chip.textContent = text ?? '';
+  }
+
   setTeams(home: string, away: string): void {
     el('home-tag').textContent = home;
     el('away-tag').textContent = away;

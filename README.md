@@ -21,7 +21,9 @@ difficulty drives the CPU QB's reads and accuracy, its runner, its
 coverage speed and how fast its pass rush wins). **MENU** or Esc goes back to it. In a match, Space / SNAP
 moves on from each break card. When the CPU has the ball you play
 defense: the camera flips behind your defense, 1–7 picks the call,
-Tab (or C) takes the defender nearest the ball, ZQSD runs him.
+Tab (or C) takes the defender nearest the ball, ZQSD runs him (before
+the snap too, to shift him). A gold arrow over his head and a strip at
+the bottom of the screen show who you control.
 
 ## Controls
 

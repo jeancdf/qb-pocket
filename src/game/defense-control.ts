@@ -36,6 +36,8 @@ export const DEF_CALLS: DefCall[] = [
 ];
 
 const RUN_SPEED = 6.2;
+/** Before the snap: walk to a new alignment. */
+const SHIFT_SPEED = 3.2;
 const SPRINT_SPEED = 7.0;
 
 export class DefenseControl {
@@ -88,6 +90,34 @@ export class DefenseControl {
     if (best) {
       this.take(best);
     }
+  }
+
+  /**
+   * Before the snap: walk him somewhere else, never offside
+   * (the defense lines up on the +z side of the ball).
+   */
+  shift(dt: number, stick: Vec2, losZ: number): void {
+    const p = this.user;
+    if (!p) {
+      return;
+    }
+    const len = Math.hypot(stick.x, stick.z);
+    if (len < 0.2) {
+      p.update(dt, false);
+    } else {
+      const to = {
+        x: p.x + (stick.x / Math.max(1, len)) * 3,
+        z: p.z + (stick.z / Math.max(1, len)) * 3
+      };
+      p.chase(to, dt, SHIFT_SPEED);
+    }
+    p.z = Math.max(p.z, losZ + 1);
+  }
+
+  /** Label for the on-screen help: number and position. */
+  label(): string {
+    const p = this.user;
+    return p ? `#${p.def.number} ${p.def.label}` : '';
   }
 
   /** Stick in world axes (already flipped for the defense camera). */
