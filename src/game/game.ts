@@ -15,7 +15,14 @@ import {
   type CoverLook
 } from './coverage-looks';
 import { CoverPlay, isCoverage, nearestEligible } from './coverage-play';
-import { callPlay, cpuAccuracy, CpuQb, CpuRunner } from './cpu-offense';
+import {
+  callPlay,
+  cpuAccuracy,
+  CpuQb,
+  CpuRunner,
+  powerFor,
+  throwMargin
+} from './cpu-offense';
 import { DEF_CALLS, DefenseControl } from './defense-control';
 import { separatePlayers } from './collisions';
 import { Drive } from './drive';
@@ -844,12 +851,21 @@ export class FootballGame {
       this.eyes.look(eye);
     }
     this.eyes.tick(dt, this.eligibles(), qb, true, null);
-    const defs = this.defenders();
-    const reads = this.eligibles().map((p) => ({
-      id: p.def.id,
-      grade: gradeReceiver(p, qb, defs),
-      dist: xzDist(qb, p)
-    }));
+    // Each man is read at his lead point: where he will be when
+    // a ball thrown now gets there.
+    const defs = this.defenders().filter((d) => !d.isDown());
+    const from = handPos(qb);
+    const reads = this.eligibles().map((p) => {
+      const power = powerFor(xzDist(qb, p));
+      const catchAt = this.leadReceiver(p, power);
+      const flight = flightTime(from, catchAt, power);
+      return {
+        id: p.def.id,
+        dist: xzDist(qb, catchAt),
+        power,
+        margin: throwMargin(qb, catchAt, flight, power, defs)
+      };
+    });
     const call = this.cpuQb.tick(
       dt,
       reads,
@@ -1011,9 +1027,18 @@ export class FootballGame {
 
   private leadReceiver(wr: PlayerActor, power: number): Vec2 {
     const from = handPos(this.qb());
-    let lead = wr.predict(0.6);
+    const ahead = (t: number): Vec2 => {
+      if (!wr.routeDone()) {
+        return wr.predict(t);
+      }
+      // Off script (working open): lead him along his run.
+      const v = wr.velocity();
+      const k = Math.min(t, 1.2);
+      return { x: wr.x + v.x * k, z: wr.z + v.z * k };
+    };
+    let lead = ahead(0.6);
     for (let i = 0; i < 3; i += 1) {
-      lead = wr.predict(flightTime(from, lead, power));
+      lead = ahead(flightTime(from, lead, power));
     }
     return lead;
   }

@@ -9,13 +9,20 @@ import { HALF_W } from './constants';
 import { clamp, lerp, xzDist } from './math';
 import type { PlayerActor } from './players';
 import type { OffPlay } from './plays';
-import type { CoverGrade, Vec2 } from './types';
+import type { Vec2 } from './types';
 
 export interface QbRead {
   id: string;
-  grade: CoverGrade;
-  /** Yards from the QB. */
+  /** Yards from the QB to the catch point. */
   dist: number;
+  /** Power this throw would be made with. */
+  power: number;
+  /**
+   * Seconds the ball beats the nearest defender to the catch
+   * point or the end of the throwing lane (negative = he gets
+   * there first). See throwMargin.
+   */
+  margin: number;
 }
 
 export type QbCall =
@@ -51,24 +58,62 @@ export function callPlay(
 /** Power a CPU passer puts on a throw of this length. */
 export function powerFor(dist: number): number {
   if (dist < 11) {
-    return 0.78;
+    return 0.8;
   }
   if (dist < 24) {
-    return 0.62;
+    return 0.68;
   }
-  return 0.42;
+  return 0.55;
 }
 
 /** How much wider a CPU passer scatters than a perfect one. */
 export function cpuAccuracy(skill: number): number {
-  return lerp(1.45, 0.8, clamp(skill, 0, 1));
+  return lerp(1.2, 0.75, clamp(skill, 0, 1));
+}
+
+/** Closing speed and reaction a defender gets on a thrown ball. */
+const DB_SPEED = 6.9;
+const DB_REACT = 0.35;
+/** He only has to get a hand on it. */
+const DB_REACH = 1.35;
+
+/**
+ * Throwing window in seconds: how much earlier the ball gets to
+ * the catch point (and to the back end of the lane, where an
+ * underneath defender can undercut it) than the quickest
+ * defender. A flat bullet also has to clear the middle of the
+ * lane.
+ */
+export function throwMargin(
+  from: Vec2,
+  to: Vec2,
+  flight: number,
+  power: number,
+  defenders: Vec2[]
+): number {
+  const samples = power >= 0.75 ? [0.5, 0.75, 1] : [0.75, 0.9, 1];
+  let margin = 99;
+  for (const s of samples) {
+    const p = {
+      x: from.x + (to.x - from.x) * s,
+      z: from.z + (to.z - from.z) * s
+    };
+    const ballT = flight * s;
+    for (const d of defenders) {
+      const reach = Math.max(0, xzDist(d, p) - DB_REACH);
+      const dbT = reach / DB_SPEED + DB_REACT;
+      margin = Math.min(margin, dbT - ballT);
+    }
+  }
+  return margin;
 }
 
 /**
- * Quarterback brain: drop, then read the progression one man at
- * a time. Throws the first open man, takes a window under
- * pressure, and throws it away rather than eat a sack when he
- * is good enough to know better.
+ * Quarterback brain: take the drop and let the routes develop,
+ * then read the progression one man at a time. He throws only
+ * into a real window (throwMargin, at a lead point computed from
+ * the receiver's route and the flight time). Nothing there:
+ * he holds it, and under heat throws it away.
  */
 export class CpuQb {
   private t = 0;
@@ -76,6 +121,8 @@ export class CpuQb {
   private look = 0;
   private lookT = 0;
   private done = false;
+  /** Misread on the current look (a weak QB sees ghosts). */
+  private noise = 0;
   /** Rolled once when the pocket collapses: throw it away or not. */
   private throwsAway: boolean | null = null;
 
@@ -93,6 +140,7 @@ export class CpuQb {
     this.lookT = 0;
     this.done = false;
     this.throwsAway = null;
+    this.rollNoise();
   }
 
   /** Receiver he is looking at (the defense reads his eyes). */
@@ -111,35 +159,37 @@ export class CpuQb {
       return null;
     }
     this.t += dt;
-    const drop = lerp(1.05, 0.8, this.skill);
+    // Full drop and a beat for the breaks before the first read.
+    const drop = lerp(1.5, 1.15, this.skill);
     if (this.t < drop) {
       return null;
     }
     this.lookT += dt;
+    // A better QB trusts tighter windows (and reads them right).
+    const need = lerp(0.22, 0.05, this.skill);
     const byId = new Map(reads.map((r) => [r.id, r]));
     const current = byId.get(this.order[this.look] ?? '');
-    // A weak QB sometimes forces it into a window.
-    const forces = Math.random() < (1 - this.skill) * 0.012;
-    if (current && (current.grade === 'open' ||
-        (forces && current.grade === 'window'))) {
+    const settled = this.lookT > 0.12;
+    if (current && settled && current.margin + this.noise >= need) {
       return this.throwTo(current);
     }
-    const dwell = lerp(0.62, 0.34, this.skill);
+    const dwell = lerp(0.7, 0.45, this.skill);
     if (this.lookT >= dwell) {
       this.lookT = 0;
       this.look = (this.look + 1) % Math.max(1, this.order.length);
+      this.rollNoise();
     }
-    const panic = pressure > lerp(0.55, 0.8, this.skill) ||
-      this.t > lerp(3.6, 4.4, this.skill);
+    const panic = pressure > lerp(0.6, 0.82, this.skill) ||
+      this.t > lerp(4.2, 5.0, this.skill);
     if (!panic) {
       return null;
     }
     const best = bestRead(reads);
-    if (best && best.grade !== 'covered') {
+    if (best && best.margin >= 0) {
       return this.throwTo(best);
     }
     if (this.throwsAway === null) {
-      this.throwsAway = Math.random() < this.skill * 0.9;
+      this.throwsAway = Math.random() < lerp(0.65, 0.97, this.skill);
     }
     if (this.throwsAway) {
       this.done = true;
@@ -149,26 +199,25 @@ export class CpuQb {
         spot: { x: side * (HALF_W + 5), z: losZ + 6 }
       };
     }
+    // Eats it: keeps reading in case someone comes open late.
     return null;
+  }
+
+  private rollNoise(): void {
+    // ± up to 0.25 s of misjudged window for the weakest QB.
+    this.noise = (Math.random() * 2 - 1) * 0.25 * (1 - this.skill);
   }
 
   private throwTo(r: QbRead): QbCall {
     this.done = true;
-    return { kind: 'throw', id: r.id, power: powerFor(r.dist) };
+    return { kind: 'throw', id: r.id, power: r.power };
   }
 }
 
 function bestRead(reads: QbRead[]): QbRead | null {
-  const rank: Record<CoverGrade, number> = {
-    open: 0,
-    window: 1,
-    covered: 2,
-    idle: 3
-  };
   let best: QbRead | null = null;
   for (const r of reads) {
-    if (!best || rank[r.grade] < rank[best.grade] ||
-        (rank[r.grade] === rank[best.grade] && r.dist < best.dist)) {
+    if (!best || r.margin > best.margin) {
       best = r;
     }
   }
