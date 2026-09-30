@@ -67,7 +67,7 @@ interface Pose {
   shift: number;
 }
 
-const SCALE = 1.32;
+const SCALE = 1.12;
 const HIP = 0.86;
 const THIGH = 0.4;
 const SHIN = 0.36;
@@ -113,10 +113,11 @@ export function buildRig(
     dressLeg(thigh, shin, foot, mats, bulk, limbs);
     return { thigh, shin, foot };
   };
-  const left = arm(-ax);
-  const right = arm(ax);
-  const lLeg = leg(-hx);
-  const rLeg = leg(hx);
+  // The rig faces +Z, so the player's own left is +X.
+  const left = arm(ax);
+  const right = arm(-ax);
+  const lLeg = leg(hx);
+  const rLeg = leg(-hx);
   const rig: PlayerRig = {
     pos: def.pos,
     pelvis,
@@ -172,9 +173,9 @@ function kindTarget(
     case 'catch':
       return catchPose(t);
     case 'juke':
-      return jukePose(t, speed < 0 ? -1 : 1);
+      return jukePose(t, speed < 0 ? 1 : -1);
     case 'dive':
-      return divePose(t, speed < 0 ? -1 : 1);
+      return divePose(t, speed < 0 ? 1 : -1);
     case 'leap':
       return leapPose(t);
     case 'stumble':
@@ -208,6 +209,8 @@ export interface RunDrive {
    * to lower his centre of gravity, then stands tall at cruise.
    */
   crouch?: number;
+  /** 0–1 while a pass is being charged: ball comes up by the ear. */
+  windup?: number;
 }
 
 export function applyRun(
@@ -215,15 +218,18 @@ export function applyRun(
   phase: number,
   drive: RunDrive
 ): void {
-  applyPose(rig, runPose(phase, drive), 'run');
+  // Mirrored in setPose, so a side-dependent input flips going in.
+  const pose = runPose(phase, { ...drive, lean: -drive.lean });
+  applyPose(rig, windUp(pose, drive.windup ?? 0, false), 'run');
 }
 
 export function applyHitch(rig: PlayerRig): void {
   applyPose(rig, hitchPose(), 'hitch');
 }
 
-export function applyScan(rig: PlayerRig, t: number): void {
-  applyPose(rig, qbScan(t), 'scan');
+/** `windup` 0–1 loads the pass up by the ear (see windUp). */
+export function applyScan(rig: PlayerRig, t: number, windup = 0): void {
+  applyPose(rig, windUp(qbScan(t), windup, true), 'scan');
 }
 
 /** Every write goes through the transition blender (see pose-blend). */
@@ -231,15 +237,22 @@ function applyPose(rig: PlayerRig, target: Pose, key: string): void {
   setPose(rig, unpack(blendPose(rig, key, pack(target))));
 }
 
+/**
+ * Poses are authored with the right limbs on +X, which is the player's
+ * left: mirror every pose onto the real sides here (yaw and roll flip,
+ * pitch stays), so the right hand really is the right hand.
+ */
 function setPose(rig: PlayerRig, pose: Pose): void {
-  rig.pelvis.rotation.set(...pose.pelvis);
-  rig.pelvis.position.set(pose.shift, HIP + pose.hop, 0);
-  rig.torso.rotation.set(...pose.torso);
-  rig.neck.rotation.set(...pose.neck);
+  const m = (o: THREE.Object3D, r: XYZ, pitch = r[0]) =>
+    o.rotation.set(pitch, -r[1], -r[2]);
+  m(rig.pelvis, pose.pelvis);
+  rig.pelvis.position.set(-pose.shift, HIP + pose.hop, 0);
+  m(rig.torso, pose.torso);
+  m(rig.neck, pose.neck);
   // Pose thighs use + for hip flexion (knee forward); the joint's +X
   // swings the leg backward, so flip it here.
-  rig.leftThigh.rotation.set(-pose.lThigh[0], pose.lThigh[1], pose.lThigh[2]);
-  rig.rightThigh.rotation.set(-pose.rThigh[0], pose.rThigh[1], pose.rThigh[2]);
+  m(rig.leftThigh, pose.lThigh, -pose.lThigh[0]);
+  m(rig.rightThigh, pose.rThigh, -pose.rThigh[0]);
   rig.leftShin.rotation.set(pose.lShin, 0, 0);
   rig.rightShin.rotation.set(pose.rShin, 0, 0);
   // Feet stay parallel to the turf; pose foot values add toe-down.
@@ -250,13 +263,13 @@ function setPose(rig: PlayerRig, pose: Pose): void {
   // Pose arm pitch is measured from the pelvis; the shoulder joint now
   // sits on the torso, so take the torso's own pitch back out.
   const tp = pose.torso[0];
-  rig.leftArm.rotation.set(pose.lArm[0] - tp, pose.lArm[1], pose.lArm[2]);
-  rig.rightArm.rotation.set(pose.rArm[0] - tp, pose.rArm[1], pose.rArm[2]);
+  m(rig.leftArm, pose.lArm, pose.lArm[0] - tp);
+  m(rig.rightArm, pose.rArm, pose.rArm[0] - tp);
   // Negative X folds the elbow forward (anatomical bend).
   rig.leftFore.rotation.set(-pose.lFore, 0, 0);
   rig.rightFore.rotation.set(-pose.rFore, 0, 0);
-  rig.leftHand.rotation.set(...pose.lHand);
-  rig.rightHand.rotation.set(...pose.rHand);
+  m(rig.leftHand, pose.lHand);
+  m(rig.rightHand, pose.rHand);
 }
 
 function idlePose(pos: Pos): Pose {
@@ -282,8 +295,40 @@ function idlePose(pos: Pos): Pose {
  * bank the whole runner; a planted cut sinks the hips and shortens the
  * stride.
  */
-function runPose(phase: number, d: RunDrive): Pose {
-  const k = Math.min(1.1, Math.max(0.12, d.speed / 8.5));
+interface RunParams {
+  k: number;
+  push: number;
+  brake: number;
+  pl: number;
+  low: number;
+  pelvisX: number;
+  torsoX: number;
+  /** Fraction of a cycle each foot spends on the turf. */
+  duty: number;
+  /** Distance the planted foot travels under the hips, rig units. */
+  sweep: number;
+  /** Stride cycles per second that keep the planted foot still. */
+  hz: number;
+  /** Pelvis height at touchdown and toe-off, rig units. */
+  hEnd: number;
+  /** Extra sink at mid-stance. */
+  comp: number;
+  /** Pelvis rise over the airborne part of the stride. */
+  rise: number;
+  /** How high the heel folds up behind in the swing. */
+  lift: number;
+  /** Heel rise at toe-off, rig units. */
+  heel: number;
+}
+
+const LEG = THIGH + SHIN;
+/** Ankle-to-toe lever the heel pivots on at toe-off. */
+const TOE = 0.2;
+const GRAVITY_RIG = 10.7 / SCALE;
+
+function runParams(d: RunDrive): RunParams {
+  const speed = Math.max(0, d.speed);
+  const k = Math.min(1.1, Math.max(0.12, speed / 8.5));
   const drive = clampUnit(d.accel / 12);
   const push = Math.max(0, drive);
   const brake = Math.max(0, -drive);
@@ -293,33 +338,164 @@ function runPose(phase: number, d: RunDrive): Pose {
     0.05 + 0.08 * k + 0.16 * push - 0.14 * brake + 0.12 * pl + 0.14 * low;
   const torsoX =
     0.05 + 0.1 * k + 0.24 * push - 0.12 * brake + 0.14 * pl + 0.16 * low;
-  const reach = (0.05 + 0.3 * k) * (1 - 0.3 * brake) + 0.35 * low;
-  const amp =
-    (0.27 + 0.53 * k) * (1 - 0.45 * pl) * (1 - 0.3 * brake) * (1 - 0.2 * low);
-  const leg = (f: number) => {
-    const w = wrapAngle(f);
-    // Knee drive peaks early, then the leg paws back so the foot
-    // lands near the hips instead of reaching out in front.
-    const drive = (Math.sin(w + 0.35) + 0.25 * Math.sin(2 * w + 0.7)) / 1.1;
-    // Heel stays folded through the knee drive, unfolds just before
-    // contact (about 0.7 of a half cycle past the drive).
-    const fold = Math.abs(w - 0.15) < 1.9
-      ? Math.pow(Math.cos((Math.PI / 2) * ((w - 0.15) / 1.9)), 0.8)
-      : 0;
-    const load = Math.max(0, -Math.cos(w));
-    return {
-      hip: pelvisX + reach + 0.2 * pl + amp * drive,
-      knee:
-        0.2 + (0.45 + 1.3 * k) * fold * (1 - 0.35 * pl) +
-        (0.2 + 0.15 * k + 0.45 * low) * load +
-        0.45 * pl + 0.2 * brake + 0.55 * low,
-      foot:
-        0.55 * k * Math.pow(Math.max(0, -Math.sin(w)), 2) -
-        0.15 * Math.max(0, Math.sin(w))
-    };
+  // Real runners: cadence climbs gently (about 2.6 to 4.8 steps/s),
+  // ground contact shrinks from half the cycle to under a quarter.
+  const baseHz = (0.85 + 0.16 * speed) * (1 - 0.35 * pl) * (1 + 0.15 * brake);
+  const duty = Math.min(
+    0.72,
+    Math.max(0.2, 0.56 - 0.05 * speed) * (1 + 0.5 * pl + 0.2 * brake)
+  );
+  // The legs only reach so far; past that the feet turn over faster.
+  const maxSweep = (0.85 + 0.1 * low - 0.15 * pl) * LEG;
+  const sweep = Math.min((speed * duty) / baseHz / SCALE, maxSweep);
+  const hz = sweep > 1e-4 ? (speed * duty) / (sweep * SCALE) : baseHz;
+  const heel = (0.03 + 0.06 * k) * (1 - 0.5 * pl);
+  const reach = (y: number, z: number) =>
+    y + Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - z * z));
+  const hEnd = Math.min(
+    HIP - 0.02 - 0.015 * k - 0.1 * low - 0.06 * pl - 0.03 * brake,
+    reach(ANKLE_H, sweep / 2),
+    reach(ANKLE_H + heel, sweep / 2)
+  );
+  const air = Math.max(0, 0.5 - duty) / hz;
+  return {
+    k,
+    push,
+    brake,
+    pl,
+    low,
+    pelvisX,
+    torsoX,
+    duty,
+    sweep,
+    hz,
+    hEnd,
+    comp: 0.012 + 0.02 * k + 0.03 * low,
+    rise: Math.min(0.06, (1.4 * GRAVITY_RIG * air * air) / 8),
+    lift: (0.06 + 0.42 * k) * (1 - 0.5 * pl) * (1 - 0.3 * low),
+    heel
   };
-  const l = leg(phase);
-  const r = leg(phase + Math.PI);
+}
+
+interface FootAt {
+  /** Ankle forward of the hip joint, rig units. */
+  z: number;
+  /** Ankle height above the turf. */
+  y: number;
+  /** Pose toe-down angle. */
+  toe: number;
+  /** -1..1 through stance, or null in the swing. */
+  stance: number | null;
+  /** 0..1 through the swing. */
+  swing: number;
+}
+
+/**
+ * Where the ankle is at leg phase `f`. Mid-stance sits at f = pi, so the
+ * left leg (phase) plants as the right arm drives forward. On the turf
+ * the ankle slides back at a constant rate, exactly the body's speed.
+ */
+function footPath(r: RunParams, f: number): FootAt {
+  const s = wrapAngle(f - Math.PI);
+  const half = r.duty * Math.PI;
+  const S = r.sweep;
+  if (Math.abs(s) <= half) {
+    const t = s / half;
+    const up = Math.max(0, (t - 0.25) / 0.75);
+    const y = ANKLE_H + r.heel * up * up;
+    return {
+      z: (-t * S) / 2,
+      y,
+      toe: Math.atan2(y - ANKLE_H, TOE),
+      stance: t,
+      swing: 0
+    };
+  }
+  const q = (s > 0 ? s - half : s + 2 * Math.PI - half) /
+    (2 * Math.PI - 2 * half);
+  // Heel folds up behind first, then the knee drives the foot through
+  // and it paws back under the hips just before contact.
+  const e = smooth(clamp01((q - 0.12) / 0.8));
+  const paw = (0.03 + 0.08 * r.k) * Math.sin(Math.PI * clamp01((q - 0.45) / 0.55));
+  const lift = r.lift * Math.pow(Math.sin(Math.PI * Math.pow(q, 0.8)), 1.2);
+  const heel0 = r.heel * (1 - q) * (1 - q);
+  const toe0 = Math.atan2(r.heel, TOE);
+  return {
+    z: -S / 2 + S * e + paw,
+    y: ANKLE_H + heel0 + lift + 0.015 * r.k * q,
+    toe: toe0 * (1 - smooth(clamp01(q / 0.5))) -
+      0.15 * smooth(clamp01((q - 0.6) / 0.4)),
+    stance: null,
+    swing: q
+  };
+}
+
+/** Pelvis height that keeps the planted foot on the turf. */
+function runHeight(r: RunParams, phase: number): number {
+  let h = Infinity;
+  let airborne = true;
+  for (const f of [phase, phase + Math.PI]) {
+    const foot = footPath(r, f);
+    if (foot.stance === null) {
+      continue;
+    }
+    airborne = false;
+    const t = foot.stance;
+    const ceil = foot.y +
+      Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - foot.z * foot.z));
+    h = Math.min(h, ceil, r.hEnd - r.comp * (1 - t * t));
+  }
+  if (airborne) {
+    // Between toe-off and the next touchdown the hips float.
+    const s = wrapAngle(phase - Math.PI);
+    const half = r.duty * Math.PI;
+    const gap = Math.PI - 2 * half;
+    const into = ((s - half) % Math.PI + Math.PI) % Math.PI;
+    const q = clamp01(into / Math.max(gap, 1e-4));
+    h = r.hEnd + r.rise * 4 * q * (1 - q);
+  }
+  return h;
+}
+
+/** Two-bone IK in the leg's sagittal plane, pose convention angles. */
+function solveLeg(r: RunParams, foot: FootAt, h: number) {
+  const z = foot.z;
+  let dy = h - foot.y;
+  let dist = Math.hypot(z, dy);
+  const max = 0.995 * LEG;
+  if (dist > max) {
+    // Out of reach: let the foot hang a touch off its path.
+    dy = Math.sqrt(Math.max(0, max * max - z * z));
+    dist = max;
+  }
+  dist = Math.max(dist, 0.3 * LEG);
+  const cosKnee = (THIGH * THIGH + SHIN * SHIN - dist * dist) /
+    (2 * THIGH * SHIN);
+  const knee = Math.PI - Math.acos(clampUnit(cosKnee));
+  const cosHip = (THIGH * THIGH + dist * dist - SHIN * SHIN) /
+    (2 * THIGH * dist);
+  const thigh = Math.atan2(z, dy) + Math.acos(clampUnit(cosHip));
+  return {
+    hip: r.pelvisX + thigh,
+    knee,
+    foot: foot.toe
+  };
+}
+
+/**
+ * Gait phase speed (rad/s) that keeps the planted foot still on the
+ * turf. Stride length comes from the pose, so cadence follows speed.
+ */
+export function runPhaseRate(d: RunDrive): number {
+  return runParams(d).hz * Math.PI * 2;
+}
+
+function runPose(phase: number, d: RunDrive): Pose {
+  const prm = runParams(d);
+  const { k, pl, pelvisX, torsoX } = prm;
+  const h = runHeight(prm, phase);
+  const l = solveLeg(prm, footPath(prm, phase), h);
+  const r = solveLeg(prm, footPath(prm, phase + Math.PI), h);
   const sw = Math.sin(phase);
   const armAmp = (0.3 + 0.6 * k) * (1 - 0.4 * pl);
   const yaw = 0.12 * (0.4 + k) * sw;
@@ -340,22 +516,15 @@ function runPose(phase: number, d: RunDrive): Pose {
     lFoot: l.foot,
     rFoot: r.foot,
     neck: [0.06 - (pelvisX + torsoX) * 0.7, -yaw * 0.8, -bank * 0.7],
-    hop: 0,
+    // A banked pelvis tilts the legs; sink so the planted foot stays down.
+    hop: h - HIP - (h - ANKLE_H) * (1 - Math.cos(bank * 0.6)),
     shift: 0.025 * sw * (1 - k * 0.5)
   };
-  // Pelvis rides on the stance leg; when both feet stretch long around
-  // contact the runner is airborne, so cap the dip below mid-stance.
-  const ml = leg(0);
-  const mr = leg(Math.PI);
-  const mid: Pose = {
-    ...p,
-    lThigh: [ml.hip, 0, 0],
-    rThigh: [mr.hip, 0, 0],
-    lShin: ml.knee,
-    rShin: mr.knee
-  };
-  p.hop = Math.max(groundHop(p), groundHop(mid) - 0.04 - 0.03 * k);
   return p;
+}
+
+function smooth(t: number): number {
+  return t * t * (3 - 2 * t);
 }
 
 const ANKLE_H = 0.1;
@@ -414,64 +583,123 @@ function qbScan(t: number): Pose {
   return p;
 }
 
-/** Arm cocked back, weight on the back foot. */
+/**
+ * Set to throw: shoulders turned side-on, front arm pointing at the
+ * target, ball up by the ear with the elbow at shoulder height, weight
+ * sitting on the back (right) foot.
+ */
 function throwCock(): Pose {
   const p = qbIdle();
-  p.rArm = [-2.05, 0.22, 0.62];
-  p.rFore = 0.28;
-  p.rHand = [0.08, 0.2, -0.12];
-  p.lArm = [-0.22, 0.28, -0.55];
-  p.torso = [0.06, -0.42, 0.06];
-  p.rThigh = [0.42, 0, 0];
-  p.lThigh = [0.08, 0, 0];
-  p.neck = [0.08, -0.18, 0];
+  p.pelvis = [0.02, 0.22, 0];
+  p.torso = [0, 0.4, 0.12];
+  p.neck = [0.04, -0.62, -0.06];
+  p.rArm = [-1.65, -0.26, 1.14];
+  p.rFore = 1.92;
+  p.rHand = [-0.2, 0, 0.1];
+  p.lArm = [-0.03, 0.89, -1.54];
+  p.lFore = 0.77;
+  p.lHand = [0, 0, 0.1];
+  p.rThigh = [0.3, 0, -0.06];
+  p.rShin = 0.45;
+  p.lThigh = [0.4, 0, -0.22];
+  p.lShin = 0.3;
+  p.shift = 0.04;
+  p.hop = groundHop(p);
   return p;
 }
 
-/** Ball out of the hand: hips and shoulders have turned through. */
+/**
+ * Ball out of the hand: hips have fired open, the chest faces the
+ * target, the arm comes over the top with the hand high and in front.
+ */
 function throwRelease(): Pose {
   const p = qbIdle();
-  p.rArm = [0.55, -0.18, 0.92];
-  p.rFore = 0.12;
-  p.rHand = [0.22, -0.1, -0.18];
-  p.lArm = [0.28, 0.22, -0.72];
-  p.lFore = 0.85;
-  p.torso = [0.28, 0.48, -0.08];
-  p.rThigh = [0.12, 0, 0];
-  p.lThigh = [0.38, 0, 0];
-  p.neck = [0.1, 0.22, 0];
+  p.pelvis = [0.08, -0.15, 0];
+  p.torso = [0.28, -0.2, -0.12];
+  p.neck = [0, 0.3, 0.05];
+  p.rArm = [-0.38, -0.88, 2.34];
+  p.rFore = 0.72;
+  p.rHand = [0.2, 0, 0];
+  p.lArm = [0.32, 0.4, -0.32];
+  p.lFore = 2.2;
+  p.rThigh = [0.05, 0, -0.04];
+  p.rShin = 0.35;
+  p.lThigh = [0.45, 0, 0.06];
+  p.lShin = 0.25;
+  p.shift = -0.03;
+  p.hop = groundHop(p);
   return p;
 }
 
-/** Throwing arm finishes across the body, back heel comes up. */
+/** Throwing hand finishes by the left hip, back heel comes up. */
 function throwFollow(): Pose {
-  const p = throwRelease();
-  p.rArm = [0.95, -0.34, 0.5];
-  p.rFore = 0.42;
-  p.rHand = [0.3, -0.12, -0.22];
-  p.lArm = [0.18, 0.3, -0.62];
-  p.lFore = 1.1;
-  p.torso = [0.34, 0.58, -0.1];
-  p.pelvis = [0.1, 0.22, 0];
-  p.rThigh = [-0.12, 0, 0];
-  p.rShin = 0.72;
-  p.rFoot = 0.2;
-  p.lThigh = [0.44, 0, 0];
-  p.lShin = 0.3;
-  p.neck = [0.12, 0.26, 0];
+  const p = qbIdle();
+  p.pelvis = [0.12, -0.35, 0];
+  p.torso = [0.42, -0.4, -0.08];
+  p.neck = [-0.1, 0.5, 0.05];
+  p.rArm = [1.34, -0.89, 2.35];
+  p.rFore = 1.25;
+  p.rHand = [0.3, 0, -0.1];
+  p.lArm = [0.09, 0.62, -0.19];
+  p.lFore = 2.2;
+  p.rThigh = [-0.12, 0, -0.04];
+  p.rShin = 0.75;
+  p.rFoot = 0.35;
+  p.lThigh = [0.5, 0, 0.06];
+  p.lShin = 0.35;
+  p.shift = -0.05;
+  p.hop = groundHop(p);
   return p;
 }
 
-/** t is 0–1: cock the ball, whip it through, follow through. */
+/**
+ * t is 0–1 from the moment the ball leaves. The ball is already set
+ * by the ear (see windUp), so the arm whips through at once, then
+ * the body follows through and settles.
+ */
 function throwPose(t: number): Pose {
   const u = clamp01(t);
-  if (u < 0.3) {
-    return lerpPose(qbIdle(), throwCock(), ease(u / 0.3));
+  if (u < 0.03) {
+    return throwCock();
   }
-  if (u < 0.5) {
-    return lerpPose(throwCock(), throwRelease(), ease((u - 0.3) / 0.2));
+  if (u < 0.17) {
+    const k = (u - 0.03) / 0.14;
+    return lerpPose(throwCock(), throwRelease(), k * k * (2 - k));
   }
-  return lerpPose(throwRelease(), throwFollow(), ease((u - 0.5) / 0.5));
+  if (u < 0.55) {
+    return lerpPose(throwRelease(), throwFollow(), ease((u - 0.17) / 0.38));
+  }
+  return lerpPose(throwFollow(), qbIdle(), 0.35 * ease((u - 0.55) / 0.45));
+}
+
+/**
+ * Blend a pose toward the set-to-throw position while the pass is
+ * being charged. `legs` false keeps the feet on their own cycle
+ * (throwing on the run); only the arms, chest and head load up.
+ */
+function windUp(base: Pose, w: number, legs: boolean): Pose {
+  if (w <= 0) {
+    return base;
+  }
+  const cock = throwCock();
+  if (legs) {
+    return lerpPose(base, cock, w);
+  }
+  // Hips stay square to the run, so the chest turns a little less and
+  // keeps the run's forward lean; the head still looks downfield.
+  const turn = cock.torso[1] + 0.5 * cock.pelvis[1];
+  const top: Pose = {
+    ...base,
+    torso: [base.torso[0], turn, cock.torso[2]],
+    neck: [base.neck[0], -turn, cock.neck[2]],
+    lArm: cock.lArm,
+    rArm: cock.rArm,
+    lFore: cock.lFore,
+    rFore: cock.rFore,
+    lHand: cock.lHand,
+    rHand: cock.rHand
+  };
+  return lerpPose(base, top, w);
 }
 
 function catchReach(): Pose {

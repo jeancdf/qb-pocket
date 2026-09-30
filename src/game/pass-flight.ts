@@ -40,7 +40,7 @@ const DB_REACH = 1.35;
 const WR_DIVE_REACH = 3.1;
 const DB_DIVE_REACH = 2.4;
 /** A leap adds this much height to the catch window. */
-const LEAP_HEIGHT = 0.75;
+const LEAP_HEIGHT = 0.64;
 /** How far ahead a player reads the ball before committing. */
 const DIVE_LOOK = 0.34;
 /** Seconds of flight, then of slide, in a layout. */

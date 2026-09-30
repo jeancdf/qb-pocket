@@ -28,8 +28,8 @@ export const SACK_RANGE = 0.85;
 export const YAC_SPEED = 6.0;
 export const YAC_TIME = 2.85;
 export const TACKLE_RANGE = 1.42;
-export const CATCH_HEIGHT_MIN = 0.45;
-export const CATCH_HEIGHT_MAX = 2.85;
+export const CATCH_HEIGHT_MIN = 0.4;
+export const CATCH_HEIGHT_MAX = 2.45;
 
 export const COLORS = {
   grassA: 0x2f7a3a,

@@ -8,8 +8,10 @@ import {
   applyScan,
   buildRig,
   poseRig,
+  runPhaseRate,
   type AnimKind,
-  type PlayerRig
+  type PlayerRig,
+  type RunDrive
 } from './rig';
 import { snapPose } from './pose-blend';
 import type { CoverGrade, PlayerDef, Pos, RoutePoint, Vec2 } from './types';
@@ -61,6 +63,9 @@ export class PlayerActor {
   private idx = 0;
   private wait = 0;
   private gait = 0;
+  /** 0–1 how far the ball is loaded up by the ear for a pass. */
+  private windUp = 0;
+  private windUpOn = false;
   private plant = 0;
   private shiftZ = 0;
   private chasing = false;
@@ -110,7 +115,7 @@ export class PlayerActor {
       new THREE.MeshBasicMaterial({ color: 0xe8c547, depthTest: false })
     );
     this.marker.rotation.x = Math.PI;
-    this.marker.position.y = 2.55;
+    this.marker.position.y = 2.25;
     this.marker.renderOrder = 10;
     this.marker.visible = false;
     this.mesh.add(this.marker);
@@ -130,6 +135,8 @@ export class PlayerActor {
     this.idx = 0;
     this.wait = 0;
     this.gait = 0;
+    this.windUp = 0;
+    this.windUpOn = false;
     this.plant = 0;
     this.chasing = false;
     this.offRoute = false;
@@ -190,6 +197,11 @@ export class PlayerActor {
   /** Force a pose. Call after update() to override auto locomotion. */
   setAnim(kind: AnimKind, t: number, speed: number): void {
     poseRig(this.rig, kind, t, speed);
+  }
+
+  /** QB is charging a pass: bring the ball up by the ear. */
+  setWindUp(on: boolean): void {
+    this.windUpOn = on;
   }
 
   /** Hold a throw/catch pose for a beat, then resume. */
@@ -533,6 +545,8 @@ export class PlayerActor {
     live: boolean,
     speed: number
   ): void {
+    const load = this.windUpOn ? 1 : 0;
+    this.windUp += (load - this.windUp) * Math.min(1, dt * (load ? 12 : 8));
     if (this.tickHold(dt)) {
       return;
     }
@@ -558,7 +572,7 @@ export class PlayerActor {
     }
     if (pos === 'QB' && (!live || speed < 1.5)) {
       this.gait += dt;
-      applyScan(this.rig, live ? this.gait : 0);
+      applyScan(this.rig, live ? this.gait : 0, this.windUp);
       return;
     }
     const kind = autoKind(pos, live, speed);
@@ -656,13 +670,12 @@ export class PlayerActor {
   }
 
   /**
-   * Cadence rises only gently with speed (stride length does most of
-   * the work): about 2.6 steps/s jogging to 4.6 at full sprint.
+   * The gait clock runs at whatever rate keeps the planted foot still
+   * on the turf for this stride (see runPhaseRate): about 3 steps/s
+   * jogging to 5 at full sprint, stride length doing the rest.
    */
   private stepRun(dt: number, speed: number): void {
     const plant = Math.min(1, this.plant / PLANT_T);
-    const hz = (0.85 + 0.16 * speed) * (1 - 0.35 * plant);
-    this.gait += dt * hz * Math.PI * 2;
     this.cutLean *= Math.max(0, 1 - dt * 6);
     // Get low when the feet work hard: driving, braking or bending the
     // path (lateral yd/s²). Drop fast, rise back slowly at cruise.
@@ -672,13 +685,16 @@ export class PlayerActor {
     );
     const rate = effort > this.crouch ? 9 : 2.5;
     this.crouch += (effort - this.crouch) * Math.min(1, dt * rate);
-    applyRun(this.rig, this.gait, {
+    const drive: RunDrive = {
       speed,
       lean: this.bodyLean + this.cutLean * plant,
       accel: this.runAccel,
       plant,
-      crouch: this.crouch
-    });
+      crouch: this.crouch,
+      windup: this.windUp
+    };
+    this.gait += dt * runPhaseRate(drive);
+    applyRun(this.rig, this.gait, drive);
   }
 
   /**

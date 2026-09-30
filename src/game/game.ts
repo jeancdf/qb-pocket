@@ -544,6 +544,7 @@ export class FootballGame {
       this.flow?.match.tick(dt);
     }
     this.tickCharge(dt);
+    this.qb().setWindUp(this.charge !== null);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
     if (live || this.phase === 'yac' || this.phase === 'return') {
@@ -1035,7 +1036,7 @@ export class FootballGame {
     const x = clamp(shot.landing.x, -HALF_W - 3, HALF_W + 3);
     const z = clamp(shot.landing.z, this.drive.losZ - 1.5, 62);
     shot.landing = { x, z };
-    const to = new THREE.Vector3(x, 1.68, z);
+    const to = new THREE.Vector3(x, 1.45, z);
     const time = flightTime(from, to, power);
     const vel = ballisticVel(from, to, time);
     const breaker = nearestEligible(shot.intended, this.eligibles());
