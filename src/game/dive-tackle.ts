@@ -3,7 +3,8 @@
  * couple of yards launches himself at where the carrier is
  * going: arms out, body flat. Hit in the air and the carrier
  * goes down; miss (a juke, a cut, a bad angle) and the diver
- * belly-flops and stays on the grass for a beat.
+ * belly-flops, stays on the grass, and has to get up before he
+ * can chase again.
  */
 
 import { clamp, xzDist } from './math';
@@ -21,7 +22,8 @@ const DIVE_SPEED = 8.2;
 /** Airborne time, then the slide, then down on the grass. */
 const AIR = 0.36;
 const SLIDE = 0.34;
-const GROUND = 0.75;
+/** Then flat on the grass this long (s, plus up to 0.3) before he gets up. */
+const GROUND = 1.1;
 /** Wrap-up reach while flying (yards, center to center). */
 const HIT_REACH = 1.05;
 
@@ -102,10 +104,10 @@ export class DiveTackles {
       ? 1
       : Math.max(0, 1 - (d.t - AIR) / SLIDE) * 0.45;
     p.footwork(d.vx * k, d.vz * k, dt, p.facing, 'dive', u, d.dir);
-    if (d.t >= total + GROUND) {
+    if (d.t >= total) {
       this.dives.delete(p);
-      // Scramble back up before he can chase again.
-      p.stagger(0.35);
+      // Already flat: lie there, then get up in stages.
+      p.knockDown(GROUND + Math.random() * 0.3, false, null, true);
     }
   }
 

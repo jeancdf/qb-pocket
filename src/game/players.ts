@@ -56,6 +56,9 @@ const REACH_FROM = 2.4;
 const WALK_MIN = 0.35;
 /** Body turning faster than this on the spot takes pivot steps (rad/s). */
 const PIVOT_RATE = 1.6;
+/** Knocked down: the fall, then getting up (s); lying time varies. */
+const GROUND_FALL = 0.4;
+const GROUND_UP = 0.85;
 
 export type { AnimKind, PlayerRig };
 
@@ -72,6 +75,10 @@ export class PlayerActor {
   private vz = 0;
   /** Juked: momentum carries him on, no steering until it ends. */
   private staggerT = 0;
+  /** Knocked off his feet: seconds since, -1 while standing. */
+  private groundT = -1;
+  private groundLen = 0;
+  private groundBack = false;
   private idx = 0;
   private wait = 0;
   private gait = 0;
@@ -161,6 +168,7 @@ export class PlayerActor {
     this.vx = 0;
     this.vz = 0;
     this.staggerT = 0;
+    this.groundT = -1;
     this.idx = 0;
     this.wait = 0;
     this.gait = 0;
@@ -402,6 +410,10 @@ export class PlayerActor {
       this.updateRagdoll(dt);
       return;
     }
+    if (this.groundT >= 0) {
+      this.drift(dt);
+      return;
+    }
     if (this.tackleFall > 0 && this.holdKind !== 'tackle') {
       // Went down with the carrier: stays down until the next snap.
       poseRig(this.rig, 'tackle', 1, 0);
@@ -583,8 +595,71 @@ export class PlayerActor {
     return this.staggerT > 0;
   }
 
+  /**
+   * Off his feet (missed dive, broken ankles, stiff-armed, trucked):
+   * he slides, lies there `lie` seconds, then gets up in stages. He
+   * counts as staggered the whole time, so he cannot tackle or dive
+   * until he is standing. `back` lands him on his back, `push` is a
+   * shove (yd/s), `lying` skips the fall (already flat after a dive).
+   */
+  knockDown(
+    lie: number,
+    back = false,
+    push: Vec2 | null = null,
+    lying = false
+  ): void {
+    this.groundBack = back;
+    this.groundLen = GROUND_FALL + lie + GROUND_UP;
+    this.groundT = lying ? GROUND_FALL : 0;
+    this.staggerT = this.groundLen - this.groundT;
+    this.holdKind = null;
+    this.holdLeft = 0;
+    this.chasing = true;
+    if (push) {
+      this.vx = this.vx * 0.4 + push.x;
+      this.vz = this.vz * 0.4 + push.z;
+    }
+  }
+
+  isGrounded(): boolean {
+    return this.groundT >= 0;
+  }
+
+  /** A grounded player's frame: slide, lie there, get up. */
+  stayDown(dt: number): void {
+    this.drift(dt);
+  }
+
+  private groundFrame(dt: number): void {
+    this.groundT += dt;
+    const k = Math.exp(-dt * 4.5);
+    this.vx *= k;
+    this.vz *= k;
+    this.x += this.vx * dt;
+    this.z += this.vz * dt;
+    const t = this.groundT;
+    const lie = Math.max(0.01, this.groundLen - GROUND_FALL - GROUND_UP);
+    const u = t < GROUND_FALL
+      ? 0.25 * (t / GROUND_FALL)
+      : t < GROUND_FALL + lie
+        ? 0.25 + 0.4 * ((t - GROUND_FALL) / lie)
+        : 0.65 + 0.35 * Math.min(1, (t - GROUND_FALL - lie) / GROUND_UP);
+    this.sync();
+    poseRig(this.rig, 'ground', u, this.groundBack ? -1 : 1);
+    if (t >= this.groundLen) {
+      this.groundT = -1;
+      this.staggerT = 0;
+      this.vx = 0;
+      this.vz = 0;
+    }
+  }
+
   private drift(dt: number): void {
     this.staggerT = Math.max(0, this.staggerT - dt);
+    if (this.groundT >= 0) {
+      this.groundFrame(dt);
+      return;
+    }
     const k = Math.exp(-dt * 2.4);
     this.vx *= k;
     this.vz *= k;
@@ -633,6 +708,10 @@ export class PlayerActor {
 
   /** Bleed momentum when a controlled runner releases the stick. */
   coast(dt: number): void {
+    if (this.groundT >= 0) {
+      this.drift(dt);
+      return;
+    }
     this.coastStop(dt, COAST);
     const speed = Math.hypot(this.vx, this.vz);
     if (!this.tickHold(dt) && speed > MIN_SPD) {

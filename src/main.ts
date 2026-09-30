@@ -1,4 +1,5 @@
 import './style.css';
+import type { CarrierMove } from './game/carrier-moves';
 import { FootballGame } from './game/game';
 import { Hud } from './game/hud';
 import { Career } from './game/career';
@@ -104,8 +105,24 @@ canvas.addEventListener('pointerdown', (ev) => {
 
 const down = new Set<string>();
 
+/** Ball carrier moves beyond the Space juke (physical keys). */
+const CARRIER_KEYS: Record<string, CarrierMove> = {
+  KeyE: 'spin',
+  KeyF: 'stiffArm',
+  KeyX: 'hurdle',
+  KeyG: 'truck'
+};
+
 window.addEventListener('keydown', (ev) => {
   if (menu.isOpen()) {
+    return;
+  }
+  const move = CARRIER_KEYS[ev.code];
+  if (move && game.phase === 'yac') {
+    ev.preventDefault();
+    if (!ev.repeat) {
+      game.carrierMove(move);
+    }
     return;
   }
   if (ev.code === 'Space') {

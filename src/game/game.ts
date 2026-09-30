@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { ballisticVel, Football } from './ball';
 import { MaddenCamera } from './camera';
+import type { CarrierMove } from './carrier-moves';
 import {
   COLORS,
   GOAL_Z,
@@ -419,6 +420,13 @@ export class FootballGame {
     }
     if (this.phase === 'yac' && !this.defending) {
       this.yac.requestJuke(Math.sign(this.stickX));
+    }
+  }
+
+  /** E / F / X / G with the ball: spin, stiff-arm, hurdle, truck. */
+  carrierMove(kind: CarrierMove): void {
+    if (this.phase === 'yac' && !this.defending) {
+      this.yac.requestMove(kind, Math.sign(this.stickX));
     }
   }
 
@@ -1143,6 +1151,11 @@ export class FootballGame {
         this.moveCarrier(dt, p);
         continue;
       }
+      if (p.isGrounded()) {
+        // On the grass: lies there, then gets up (no tackling).
+        p.stayDown(dt);
+        continue;
+      }
       if (this.phase === 'yac' && this.yac.tackler === p) {
         this.yac.poseTackler();
         continue;
@@ -1193,7 +1206,8 @@ export class FootballGame {
         (p) => this.flight.isDiving(p)
       );
     } else if (this.phase === 'yac' && carrier && !this.yac.tackler) {
-      const diving = (p: PlayerActor) => this.yac.dives.has(p);
+      const diving = (p: PlayerActor) =>
+        this.yac.dives.has(p) || p.isGrounded();
       this.cover.chaseCarrier(dt, carrier, diving);
       this.line.pursue(dt, carrier, diving);
     }

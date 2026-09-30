@@ -54,7 +54,12 @@ const TAU: Record<string, number> = {
   juke: 0.06,
   stumble: 0.07,
   tackle: 0.07,
-  ragdoll: 0.07
+  ragdoll: 0.07,
+  spin: 0.06,
+  stiffArm: 0.07,
+  hurdle: 0.06,
+  truck: 0.07,
+  ground: 0.08
 };
 
 /** Bigger gaps get a little more time so a full-body swap reads. */

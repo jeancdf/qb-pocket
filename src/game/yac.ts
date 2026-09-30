@@ -1,9 +1,11 @@
 /**
  * Ball carrier after the catch (or a QB scramble): the front
- * defender, the juke, pursuit and the tackle. FootballGame owns
+ * defender, the juke and the other moves (carrier-moves.ts),
+ * pursuit and the tackle. FootballGame owns
  * the drive result; this only says when the run is over.
  */
 
+import { MOVES, moveOdds, readDefender, type CarrierMove } from './carrier-moves';
 import { GOAL_Z, HALF_W, TACKLE_RANGE, YAC_SPEED } from './constants';
 import { DiveTackles } from './dive-tackle';
 import { clamp, xzDist } from './math';
@@ -28,6 +30,8 @@ const CUT_FORWARD = 2.4;
 const RECOVER_TIME = 0.25;
 /** A beaten defender slides past for this long. */
 const STAGGER_TIME = 0.8;
+/** Ankles broken: seconds on the grass (plus up to 0.35). */
+const JUKE_LIE = 0.9;
 
 export type JukeState =
   | 'none'
@@ -35,11 +39,32 @@ export type JukeState =
   | 'cut'
   | 'escaped'
   | 'stuffed'
+  | 'move'
   | 'down';
 
 export type JukeResult = 'won' | 'stuffed' | null;
 
 type Toast = (msg: string, bad: boolean) => void;
+
+/** A spin, stiff-arm, hurdle or truck in progress. */
+interface Act {
+  kind: CarrierMove;
+  t: number;
+  target: PlayerActor | null;
+  /** Heading and speed going in; `dir` is the world side (+x/-x). */
+  face: number;
+  entry: number;
+  dir: number;
+  decided: boolean;
+  won: boolean;
+}
+
+const NO_COOL: Record<CarrierMove, number> = {
+  spin: 0,
+  stiffArm: 0,
+  hurdle: 0,
+  truck: 0
+};
 
 export class YacRun {
   carrier: PlayerActor | null = null;
@@ -61,7 +86,17 @@ export class YacRun {
   private frontMissT = 0;
   private jukeCool = 0;
   /** A press that came in during cooldown, replayed when ready. */
-  private queued: { dir: number; t: number } | null = null;
+  private queued: {
+    kind: 'juke' | CarrierMove;
+    dir: number;
+    t: number;
+  } | null = null;
+  private act: Act | null = null;
+  private moveCool = { ...NO_COOL };
+  /** Speed factor while the carrier gathers after a move. */
+  private afterMul = 1;
+  /** Divers a move beat: they fly past instead of wrapping up. */
+  private readonly beaten = new Set<PlayerActor>();
 
   constructor(
     private readonly players: PlayerActor[],
@@ -82,6 +117,10 @@ export class YacRun {
     this.frontMissT = 0;
     this.jukeCool = 0;
     this.queued = null;
+    this.act = null;
+    this.moveCool = { ...NO_COOL };
+    this.afterMul = 1;
+    this.beaten.clear();
     this.dives.clear();
   }
 
@@ -116,10 +155,9 @@ export class YacRun {
     if (!wr || wr.isDown() || this.state === 'down') {
       return;
     }
-    if (this.jukeCool > 0 || this.state === 'plant' ||
-        this.state === 'cut') {
+    if (this.jukeCool > 0 || this.busy()) {
       // Pressed a hair early: fire it the moment it's allowed.
-      this.queued = { dir: direction, t: JUKE_BUFFER };
+      this.queued = { kind: 'juke', dir: direction, t: JUKE_BUFFER };
       return;
     }
     this.queued = null;
@@ -137,6 +175,52 @@ export class YacRun {
       : wr.facing;
     this.state = 'plant';
     this.jukeT = 0;
+  }
+
+  /**
+   * E / F / X / G: spin, stiff-arm, hurdle, truck. `direction` is
+   * the stick side (+x/-x); 0 picks from where the defender is.
+   */
+  requestMove(kind: CarrierMove, direction: number): void {
+    const wr = this.carrier;
+    if (!wr || wr.isDown() || this.state === 'down') {
+      return;
+    }
+    if (this.moveCool[kind] > 0 || this.busy()) {
+      this.queued = { kind, dir: direction, t: JUKE_BUFFER };
+      return;
+    }
+    this.queued = null;
+    const v = wr.velocity();
+    const entry = Math.hypot(v.x, v.z);
+    const face = entry > 0.5 ? Math.atan2(v.x, v.z) : wr.facing;
+    const target = this.moveTarget(wr, kind);
+    // Which side of the runner's line he is on (+1: world +x side
+    // when running upfield, same convention as the juke).
+    const side = target
+      ? Math.sign((target.x - wr.x) * Math.cos(face) -
+          (target.z - wr.z) * Math.sin(face)) || 1
+      : 1;
+    let dir = direction === 0 ? 0 : direction < 0 ? -1 : 1;
+    if (kind === 'stiffArm') {
+      // The arm goes at the man.
+      dir = side;
+    } else if (dir === 0) {
+      // Spin away from him.
+      dir = -side;
+    }
+    this.front = target;
+    this.act = {
+      kind,
+      t: 0,
+      target,
+      face,
+      entry,
+      dir,
+      decided: false,
+      won: false
+    };
+    this.state = 'move';
   }
 
   /**
@@ -161,6 +245,10 @@ export class YacRun {
     const top = this.carrierSpeed(wr === qb) * sprint;
     if (this.state === 'plant' || this.state === 'cut') {
       this.footwork(wr, dt);
+      return;
+    }
+    if (this.state === 'move' && this.act) {
+      this.moveFootwork(wr, this.act, dt);
       return;
     }
     const length = Math.hypot(stick.x, stick.z);
@@ -200,21 +288,22 @@ export class YacRun {
     this.yacT += dt;
     this.jukeT += dt;
     this.jukeCool = Math.max(0, this.jukeCool - dt);
-    if (this.queued) {
-      this.queued.t -= dt;
-      if (this.queued.t <= 0) {
-        this.queued = null;
-      } else if (this.jukeCool <= 0 && this.state !== 'plant' &&
-          this.state !== 'cut') {
-        this.requestJuke(this.queued.dir);
-      }
+    for (const k of Object.keys(this.moveCool) as CarrierMove[]) {
+      this.moveCool[k] = Math.max(0, this.moveCool[k] - dt);
     }
+    if (this.act) {
+      this.act.t += dt;
+    }
+    this.replayQueued(dt);
     this.frontMissT = Math.max(0, this.frontMissT - dt);
     if (wr.isDown()) {
       this.tackleT += dt;
       return this.tackleT >= TACKLE_SETTLE_TIME;
     }
     this.updateJuke();
+    if (this.updateAct(wr)) {
+      return false;
+    }
     wr.x = clamp(wr.x, -HALF_W + 0.35, HALF_W - 0.35);
     if (wr.z >= GOAL_Z) {
       return true;
@@ -241,6 +330,14 @@ export class YacRun {
 
   /** The juke beat this defender (resolved, or he is still fooled). */
   private dodged(p: PlayerActor): boolean {
+    if (this.beaten.has(p)) {
+      return true;
+    }
+    const a = this.act;
+    if (a?.kind === 'hurdle' && a.t > 0.06 && a.t < 0.5) {
+      // Airborne: every diver goes under.
+      return true;
+    }
     if (p !== this.front) {
       return false;
     }
@@ -257,10 +354,13 @@ export class YacRun {
         return 'Ankles broken. Get upfield before pursuit closes.';
       case 'stuffed':
         return 'He read it. Juke when he closes in at 2–3 yards.';
+      case 'move':
+        return this.act ? MOVES[this.act.kind].status : '';
       case 'down':
         return 'Tackled. The carrier is physically going to ground.';
       default:
-        return 'ZQSD to steer, Shift to sprint, Space to juke.';
+        return 'ZQSD steer, Shift sprint, Space juke, E spin, ' +
+          'F stiff-arm, X hurdle, G truck.';
     }
   }
 
@@ -272,7 +372,186 @@ export class YacRun {
       return base;
     }
     // Won: a burst out of the cut. Read: stuck in the mud.
-    return this.state === 'escaped' ? base * 1.08 : base * 0.72;
+    return base * this.afterMul;
+  }
+
+  private busy(): boolean {
+    return this.state === 'plant' || this.state === 'cut' ||
+      this.state === 'move';
+  }
+
+  /** Fire a press that came in early, once it is allowed. */
+  private replayQueued(dt: number): void {
+    const q = this.queued;
+    if (!q) {
+      return;
+    }
+    q.t -= dt;
+    if (q.t <= 0) {
+      this.queued = null;
+      return;
+    }
+    if (this.busy()) {
+      return;
+    }
+    if (q.kind === 'juke') {
+      if (this.jukeCool <= 0) {
+        this.requestJuke(q.dir);
+      }
+    } else if (this.moveCool[q.kind] <= 0) {
+      this.requestMove(q.kind, q.dir);
+    }
+  }
+
+  /** Who the move is aimed at: a diver for a hurdle, else the front man. */
+  private moveTarget(
+    wr: PlayerActor,
+    kind: CarrierMove
+  ): PlayerActor | null {
+    const range = MOVES[kind].range;
+    if (kind === 'hurdle') {
+      let best: PlayerActor | null = null;
+      let d = range;
+      for (const p of this.players) {
+        const n = xzDist(p, wr);
+        if (this.dives.has(p) && n < d) {
+          best = p;
+          d = n;
+        }
+      }
+      if (best) {
+        return best;
+      }
+    }
+    const front = this.nearestDefender(wr);
+    return front && xzDist(front, wr) <= range ? front : null;
+  }
+
+  /** Scripted carrier motion for a spin, stiff-arm, hurdle or truck. */
+  private moveFootwork(wr: PlayerActor, a: Act, dt: number): void {
+    const spec = MOVES[a.kind];
+    const u = Math.min(1, a.t / spec.time);
+    const f = a.face;
+    const fx = Math.sin(f);
+    const fz = Math.cos(f);
+    const lx = Math.cos(f) * a.dir;
+    const lz = -Math.sin(f) * a.dir;
+    let speed = Math.max(a.entry * spec.keep, spec.minSpeed);
+    let side = 0;
+    let face = f;
+    if (a.kind === 'spin') {
+      // A full turn on the move, drifting off the contact.
+      const e = u * u * (3 - 2 * u);
+      face = f + a.dir * Math.PI * 2 * e;
+      side = 1.6 * Math.sin(u * Math.PI);
+    } else if (a.kind === 'stiffArm') {
+      // Lean off the arm, away from him.
+      side = -0.6 * Math.sin(u * Math.PI);
+    } else if (a.kind === 'truck' && a.decided && a.won) {
+      // Running through a man costs some speed.
+      speed *= 0.85;
+    }
+    const vx = fx * speed + lx * side;
+    const vz = fz * speed + lz * side;
+    wr.footwork(vx, vz, dt, face, spec.anim, u, a.dir);
+  }
+
+  /**
+   * Contact, then the end of the move. Returns true when a failed
+   * move ended in the tackle.
+   */
+  private updateAct(wr: PlayerActor): boolean {
+    const a = this.act;
+    if (!a || this.state !== 'move') {
+      return false;
+    }
+    const spec = MOVES[a.kind];
+    if (!a.decided && a.t >= spec.hit) {
+      a.decided = true;
+      a.won = this.resolveMove(wr, a);
+      if (!a.won && this.punish(wr, a)) {
+        this.act = null;
+        return true;
+      }
+    }
+    if (a.t < spec.time) {
+      return false;
+    }
+    this.lastJuke = a.won ? 'won' : 'stuffed';
+    this.state = a.won ? 'escaped' : 'stuffed';
+    this.jukeT = 0;
+    this.afterMul = a.won ? spec.after : 0.72;
+    this.moveCool[a.kind] = spec.cooldown;
+    this.act = null;
+    return false;
+  }
+
+  private resolveMove(wr: PlayerActor, a: Act): boolean {
+    const d = a.target;
+    const spec = MOVES[a.kind];
+    if (!d || d.isDown() || d.isStaggered() ||
+        xzDist(d, wr) > spec.range + 0.8) {
+      // Nobody there any more: the move just happens.
+      return true;
+    }
+    const read = readDefender(wr, d, a.face, this.dives.has(d));
+    const won = Math.random() < moveOdds(a.kind, read);
+    if (won) {
+      this.beat(wr, d, a);
+    }
+    this.toast(won ? spec.won : spec.lost, !won);
+    return won;
+  }
+
+  /** The move worked: what happens to the man it beat. */
+  private beat(wr: PlayerActor, d: PlayerActor, a: Act): void {
+    const spec = MOVES[a.kind];
+    const diving = this.dives.has(d);
+    const lie = spec.lie + Math.random() * 0.35;
+    if (a.kind === 'hurdle' || (a.kind === 'spin' && diving)) {
+      // He goes under / past; a diver ends on the grass anyway.
+      this.beaten.add(d);
+      if (!diving) {
+        d.stagger(0.6);
+      }
+      return;
+    }
+    if (a.kind === 'spin') {
+      // Grabbed at air and went down.
+      d.knockDown(lie);
+      return;
+    }
+    // Stiff-arm or truck: shoved off the carrier.
+    const dist = Math.max(xzDist(d, wr), 0.01);
+    const shove = a.kind === 'truck' ? 3.2 : 2.6;
+    const push = {
+      x: ((d.x - wr.x) / dist) * shove,
+      z: ((d.z - wr.z) / dist) * shove
+    };
+    if (diving) {
+      this.dives.end(d);
+    }
+    d.knockDown(lie, !diving, push);
+  }
+
+  /** A failed power move against a man in reach: he wraps you up. */
+  private punish(wr: PlayerActor, a: Act): boolean {
+    const d = a.target;
+    if (!d || a.kind === 'spin' || d.isDown() || d.isStaggered()) {
+      return false;
+    }
+    if (a.kind === 'hurdle' && this.dives.has(d)) {
+      // Missed the jump: his dive reaches you on its own.
+      return false;
+    }
+    if (xzDist(d, wr) > TACKLE_RANGE + 0.9) {
+      return false;
+    }
+    if (this.dives.has(d)) {
+      this.dives.end(d);
+    }
+    this.startTackle(wr, d);
+    return true;
   }
 
   /**
@@ -313,8 +592,11 @@ export class YacRun {
       this.jukeWon = this.resolveJuke(wr);
       this.state = 'cut';
       if (this.jukeWon && this.front) {
-        this.front.stagger(STAGGER_TIME);
         this.frontMissT = STAGGER_TIME;
+        if (!this.dives.has(this.front)) {
+          // Ankles broken: he goes down and has to get up.
+          this.front.knockDown(JUKE_LIE + Math.random() * 0.35);
+        }
       }
       return;
     }
@@ -325,6 +607,7 @@ export class YacRun {
     this.lastJuke = won ? 'won' : 'stuffed';
     this.state = won ? 'escaped' : 'stuffed';
     this.jukeT = 0;
+    this.afterMul = won ? 1.08 : 0.72;
     this.jukeCool = JUKE_COOLDOWN;
     if (this.front) {
       this.toast(won ? 'ANKLES BROKEN' : 'JUKE READ', !won);
@@ -401,7 +684,8 @@ export class YacRun {
     let best: PlayerActor | null = null;
     let score = 99;
     for (const defender of this.players) {
-      if (defender.def.side !== 'defense' || defender.isDown()) {
+      if (defender.def.side !== 'defense' || defender.isDown() ||
+          defender.isGrounded()) {
         continue;
       }
       // Prefer the man in front of the runner.

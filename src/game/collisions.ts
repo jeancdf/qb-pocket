@@ -18,12 +18,12 @@ export function separatePlayers(
   for (let pass = 0; pass < PASSES; pass += 1) {
     for (let i = 0; i < players.length; i += 1) {
       const a = players[i];
-      if (a.isDown()) {
+      if (a.isDown() || a.isGrounded()) {
         continue;
       }
       for (let j = i + 1; j < players.length; j += 1) {
         const b = players[j];
-        if (b.isDown() || skip(a, b)) {
+        if (b.isDown() || b.isGrounded() || skip(a, b)) {
           continue;
         }
         let dx = b.x - a.x;

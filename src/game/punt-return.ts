@@ -112,7 +112,8 @@ export class PuntReturn {
     for (const p of chasers) {
       const d = xzDist(p, c);
       if (d > 1.3 && d < 3.4 && Math.random() < 0.7) {
-        p.stagger(0.7);
+        // Ankles broken: down on the grass, up again before he chases.
+        p.knockDown(0.9 + Math.random() * 0.4);
       }
     }
   }

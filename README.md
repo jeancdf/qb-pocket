@@ -37,6 +37,12 @@ the bottom of the screen show who you control.
 - **V** — cycle the run plays (Inside zone, Outside zone, Draw); after
   the handoff ZQSD steers the RB. The line run-blocks for a moment,
   then the DL get off their blocks.
+- With the ball in the open field: ZQSD steer, **Shift** sprint,
+  **Space** juke, **E** spin, **F** stiff-arm, **X** hurdle (over a
+  diving tackler), **G** truck (lower the shoulder, head-on). Each move
+  has its own cooldown and works or not depending on distance, the
+  defender's angle and speed, and size. A beaten defender goes down,
+  stays on the grass a second or so, gets up, and only then can tackle.
 - **P** on 4th down in a match — punt (P again cancels)
 - **RESET** or R — same play again
 
@@ -62,7 +68,9 @@ Vite + TypeScript + Three.js. 1 yard = 1 world unit.
 | `defense-control.ts` | Player on defense: call sheet (1–7), controlled defender (gold ring), switching, movement. |
 | `game.ts` | `FootballGame`: phases, inputs, charging and releasing a throw, drive results. Glue only; put new rules in a module below. |
 | `camera.ts` | The only code that moves the camera. Stays behind the QB, no side offset; on defense it rides behind the controlled defender and turns toward the ball (the only yaw, heavily smoothed); stick input follows that heading. |
-| `yac.ts` | Ball carrier after the catch or a scramble: juke, pursuit, tackle. |
+| `yac.ts` | Ball carrier after the catch or a scramble: juke and the other moves, pursuit, tackle. |
+| `carrier-moves.ts` | Spin, stiff-arm, hurdle, truck: timings, cooldowns and the odds of each against a defender. |
+| `dive-tackle.ts` | Diving tackles; a missed diver stays down, then gets up (`PlayerActor.knockDown`). |
 | `pass-flight.ts` | Ball in the air: receiver break, catch / drop / breakup / pick. |
 | `throwing.ts` | Pure throw math: charge power, accuracy, flight time, catch contest. |
 | `coverage-looks.ts` | Every defensive call (Cover 0/1/2/3/4, blitzes) as data. |

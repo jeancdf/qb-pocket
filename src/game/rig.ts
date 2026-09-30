@@ -24,7 +24,12 @@ export type AnimKind =
   | 'tackle'
   | 'ragdoll'
   | 'dive'
-  | 'leap';
+  | 'leap'
+  | 'spin'
+  | 'stiffArm'
+  | 'hurdle'
+  | 'truck'
+  | 'ground';
 
 export interface PlayerRig {
   pos: Pos;
@@ -190,6 +195,16 @@ function kindTarget(
       return divePose(t, speed < 0 ? 1 : -1);
     case 'leap':
       return leapPose(t);
+    case 'spin':
+      return spinPose(t, speed < 0 ? 1 : -1);
+    case 'stiffArm':
+      return stiffArmPose(t, speed < 0 ? 1 : -1);
+    case 'hurdle':
+      return hurdlePose(t);
+    case 'truck':
+      return truckPose(t);
+    case 'ground':
+      return groundPose(t, speed < 0);
     case 'stumble':
       return stumblePose(t);
     case 'tackle':
@@ -1228,6 +1243,227 @@ function jukePose(t: number, dir: number): Pose {
   p.hop = 0.03;
   p.shift = dir * 0.08 * whip * ease;
   return p;
+}
+
+/** Ball high and tight under the right arm (carrier moves). */
+function tuckBall(p: Pose): void {
+  p.rArm = [-0.48, -0.18, 0.38];
+  p.rFore = 1.72;
+}
+
+/**
+ * Spin, t 0–1 (PlayerActor turns the body a full circle): sink the
+ * hips, cover the ball with both arms, feet chop around under a low
+ * centre, head whips round first.
+ */
+function spinPose(t: number, dir: number): Pose {
+  const u = clamp01(t);
+  const k = Math.sin(u * Math.PI);
+  const p = runPose(u * Math.PI * 3, {
+    speed: 4,
+    lean: dir * 0.25 * k,
+    accel: 0,
+    plant: 0.4 * k
+  });
+  p.pelvis = [0.32 + 0.12 * k, 0, dir * 0.12 * k];
+  p.torso = [0.36, dir * 0.22 * k, 0];
+  tuckBall(p);
+  p.lArm = [-0.62, 0.7, -0.1];
+  p.lFore = 1.6;
+  p.neck = [0, dir * 0.35 * k, 0];
+  p.hop -= 0.07 * k;
+  return p;
+}
+
+/**
+ * Stiff-arm, t 0–1: the free arm shoots out and locks at the
+ * defender's facemask on side `dir`, chest turned to him, legs
+ * still running; then the arm comes back in.
+ */
+function stiffArmPose(t: number, dir: number): Pose {
+  const u = clamp01(t);
+  const reach = u < 0.25
+    ? ease(u / 0.25)
+    : u > 0.8 ? 1 - ease((u - 0.8) / 0.2) : 1;
+  const p = runPose(u * Math.PI * 2.4, {
+    speed: 6,
+    lean: -dir * 0.15 * reach,
+    accel: 0,
+    plant: 0
+  });
+  tuckBall(p);
+  p.lArm = [
+    -0.3 - 1.15 * reach,
+    dir * 0.4 * reach,
+    -0.6 + 0.35 * reach
+  ];
+  p.lFore = 1.1 * (1 - reach) + 0.05 * reach;
+  p.lHand = [-0.5 * reach, 0, 0.1];
+  p.torso = [0.25, dir * 0.3 * reach, -dir * 0.1 * reach];
+  p.neck = [0.05, dir * 0.2 * reach, 0];
+  return p;
+}
+
+/**
+ * Hurdle, t 0–1: take off, lead leg reaching out over the man on
+ * the ground, trail leg tucked, free arm out for balance, land.
+ */
+function hurdlePose(t: number): Pose {
+  const u = clamp01(t);
+  const air = Math.sin(u * Math.PI);
+  const p = skillIdle();
+  tuckBall(p);
+  p.lArm = [-0.2 - 0.9 * air, 0, -0.3 - 0.9 * air];
+  p.lFore = 0.4;
+  p.pelvis = [0.2, 0, 0];
+  p.torso = [0.1 + 0.35 * air, 0, 0];
+  p.lThigh = [0.3 + 1.1 * air, 0, 0.05];
+  p.lShin = 0.35 + 0.1 * air;
+  p.rThigh = [0.3 - 0.7 * air, 0, -0.05];
+  p.rShin = 0.4 + 1.3 * air;
+  p.neck = [0.2 * air, 0, 0];
+  p.hop = groundHop(p) * (1 - air) + 0.8 * air;
+  return p;
+}
+
+/**
+ * Truck, t 0–1: drop the pad level, shoulder first, free forearm up
+ * as a shield, head up, and run through the man.
+ */
+function truckPose(t: number): Pose {
+  const u = clamp01(t);
+  const k = u < 0.3
+    ? ease(u / 0.3)
+    : u > 0.75 ? 1 - ease((u - 0.75) / 0.25) : 1;
+  const p = runPose(u * Math.PI * 2.6, {
+    speed: 6,
+    lean: 0,
+    accel: 4,
+    plant: 0
+  });
+  p.pelvis = [p.pelvis[0] + 0.2 * k, p.pelvis[1], p.pelvis[2]];
+  p.torso = [0.3 + 0.45 * k, 0.22 * k, 0];
+  p.neck = [-0.4 * k, 0, 0];
+  tuckBall(p);
+  p.lArm = [-0.2 - 0.7 * k, 0.4 * k, -0.3];
+  p.lFore = 1.0 + 0.9 * k;
+  p.hop -= 0.12 * k;
+  return p;
+}
+
+/** Face down on the grass, as a dive ends. */
+function flatFront(): Pose {
+  const p = divePose(1, 0);
+  p.lArm = [-2.2, 0.3, -0.35];
+  p.rArm = [-2.1, -0.3, 0.35];
+  p.lFore = 0.7;
+  p.rFore = 0.7;
+  p.neck = [-0.7, 0.3, 0];
+  return p;
+}
+
+/** Flat on his back, knees up a little. */
+function flatBack(): Pose {
+  const p = skillIdle();
+  p.pelvis = [-1.35, 0, 0];
+  p.torso = [-0.05, 0, 0];
+  p.neck = [0.4, 0, 0];
+  p.lThigh = [0.4, 0, 0.14];
+  p.rThigh = [0.1, 0, -0.14];
+  p.lShin = 0.8;
+  p.rShin = 0.25;
+  p.lArm = [0.2, 0, -1.1];
+  p.rArm = [0.1, 0, 1.0];
+  p.lFore = 0.4;
+  p.rFore = 0.4;
+  p.hop = -0.7;
+  return p;
+}
+
+/** Hands and knees, pushing up off the turf. */
+function allFours(): Pose {
+  const p = skillIdle();
+  p.pelvis = [0.9, 0, 0];
+  p.torso = [0.5, 0, 0];
+  p.lThigh = [0.9, 0, 0.08];
+  p.rThigh = [0.9, 0, -0.08];
+  p.lShin = 1.6;
+  p.rShin = 1.6;
+  p.lArm = [-0.9, 0, -0.15];
+  p.rArm = [-0.9, 0, 0.15];
+  p.lFore = 0.1;
+  p.rFore = 0.1;
+  p.neck = [-0.5, 0, 0];
+  p.hop = groundHop(p);
+  return p;
+}
+
+/** Sitting up on the grass, hands behind. */
+function sitUp(): Pose {
+  const p = skillIdle();
+  p.pelvis = [0, 0, 0];
+  p.torso = [0.25, 0, 0];
+  p.lThigh = [1.45, 0, 0.12];
+  p.rThigh = [1.3, 0, -0.12];
+  p.lShin = 1.2;
+  p.rShin = 0.9;
+  p.lArm = [0.6, 0, -0.35];
+  p.rArm = [0.6, 0, 0.35];
+  p.lFore = 0.2;
+  p.rFore = 0.2;
+  p.neck = [0.1, 0, 0];
+  p.hop = -0.66;
+  return p;
+}
+
+/** One knee down, front foot planted, hand on the knee. */
+function kneel(): Pose {
+  const p = skillIdle();
+  p.pelvis = [0.1, 0, 0];
+  p.torso = [0.45, 0, 0];
+  p.lThigh = [1.45, 0, 0.08];
+  p.lShin = 1.5;
+  p.rThigh = [0.05, 0, -0.08];
+  p.rShin = 1.6;
+  p.lArm = [-0.5, 0.1, -0.4];
+  p.lFore = 0.6;
+  p.rArm = [0.3, 0, 0.35];
+  p.rFore = 0.3;
+  p.neck = [-0.2, 0, 0];
+  p.hop = groundHop(p);
+  return p;
+}
+
+/**
+ * Knocked off his feet, t 0–1 (PlayerActor maps the seconds):
+ * 0–0.25 falls, 0.25–0.65 lies there, 0.65–1 gets up in stages
+ * (push up or sit up, one knee, stand). `back`: on his back.
+ */
+function groundPose(t: number, back: boolean): Pose {
+  const u = clamp01(t);
+  const flat = back ? flatBack() : flatFront();
+  if (u < 0.25) {
+    const from = back ? lineIdle(false) : stumblePose(u * 2);
+    return lerpPose(from, flat, ease(u / 0.25));
+  }
+  if (u < 0.65) {
+    // Winded: small movements, nothing that reads as getting up.
+    const b = Math.sin(u * 40) * 0.04;
+    flat.torso = [flat.torso[0] + b, flat.torso[1], flat.torso[2]];
+    flat.neck = [flat.neck[0] - b, flat.neck[1], flat.neck[2]];
+    return flat;
+  }
+  const g = (u - 0.65) / 0.35;
+  const mid = back ? sitUp() : allFours();
+  const stand = skillIdle();
+  stand.hop = groundHop(stand);
+  if (g < 0.35) {
+    return lerpPose(flat, mid, ease(g / 0.35));
+  }
+  if (g < 0.7) {
+    return lerpPose(mid, kneel(), ease((g - 0.35) / 0.35));
+  }
+  return lerpPose(kneel(), stand, ease((g - 0.7) / 0.3));
 }
 
 /** A beaten defender overstrides before recovering pursuit. */
