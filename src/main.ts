@@ -3,6 +3,7 @@ import { FootballGame } from './game/game';
 import { Hud } from './game/hud';
 import { Career } from './game/career';
 import { Menu } from './game/menu';
+import { SprintGauge } from './game/sprint';
 import { ThrowMeter } from './game/throw-meter';
 
 const canvas = document.querySelector<HTMLCanvasElement>('#game-canvas');
@@ -14,6 +15,7 @@ const game = new FootballGame(canvas);
 window.__qb = game;
 const hud = new Hud();
 const meter = new ThrowMeter();
+const sprintGauge = new SprintGauge();
 const menu = new Menu();
 const career = new Career();
 menu.showCareer(() => career.summary());
@@ -225,6 +227,12 @@ function frame(now: number): void {
     meter.show(charge.power, charge.spread, charge.pressure, charge.over);
   } else {
     meter.hide();
+  }
+  const sprint = game.sprintInfo();
+  if (sprint.visible) {
+    sprintGauge.show(sprint.level, sprint.fading, sprint.sprinting);
+  } else {
+    sprintGauge.hide();
   }
   hudTick += dt;
   if (hudTick > 0.12) {

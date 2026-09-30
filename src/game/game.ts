@@ -40,6 +40,7 @@ import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS } from './plays';
 import { handPos, PlayerActor } from './players';
 import { animateCrowd } from './body-language';
+import { SprintMeter } from './sprint';
 import { advancePoseClock } from './pose-blend';
 import {
   cpuPunts,
@@ -143,6 +144,8 @@ export class FootballGame {
   private motionIdx = 0;
   private stickX = 0;
   private sprint = false;
+  /** Sprint freshness of the runner the player controls. */
+  private readonly stamina = new SprintMeter();
   private stickZ = 0;
   private charge: { target: ThrowTarget; t: number } | null = null;
   private turnoverText = '';
@@ -544,6 +547,7 @@ export class FootballGame {
         this.phase === 'return') {
       this.flow?.match.tick(dt);
     }
+    this.stamina.tick(dt, this.sprint && this.userRunning());
     this.tickCharge(dt);
     this.qb().setWindUp(this.charge ? this.aimSpot() : null);
     this.tickActors(dt, live);
@@ -600,6 +604,32 @@ export class FootballGame {
     }, dt);
     this.followCam(dt, live);
     this.madden.update(dt);
+  }
+
+  /**
+   * The player is driving a runner right now, so Shift spends sprint:
+   * his own carrier runs on by itself, anyone else needs the stick.
+   */
+  private userRunning(): boolean {
+    if ((this.phase === 'yac' && !this.defending) || this.phase === 'return') {
+      return true;
+    }
+    const steering = Math.abs(this.stickX) + Math.abs(this.stickZ) > 0.2;
+    return steering &&
+      (this.phase === 'play' || this.phase === 'throw' || this.phase === 'yac');
+  }
+
+  /** Sprint gauge: level 1 fresh .. 0 spent, fading past 4 s. */
+  sprintInfo(): { visible: boolean; level: number; fading: boolean; sprinting: boolean } {
+    const s = this.stamina.info();
+    const inPlay = this.phase === 'play' || this.phase === 'throw' ||
+      this.phase === 'yac' || this.phase === 'return';
+    return {
+      visible: inPlay && s.active,
+      level: s.level,
+      fading: s.fading,
+      sprinting: this.sprint && this.userRunning()
+    };
   }
 
   /** Where the charged pass is aimed (the ring on the grass). */
@@ -1093,7 +1123,7 @@ export class FootballGame {
         z: qb.z + this.stickZ * 5
       };
       qb.leaveRoute();
-      qb.chase(to, dt, this.sprint ? 7.1 : 6.35);
+      qb.chase(to, dt, 6.35 * this.stamina.factor());
       if (qb.z > this.drive.losZ + 1.35) {
         this.startQbRun();
       }
@@ -1138,7 +1168,7 @@ export class FootballGame {
         }
       }
       if (p === this.defense.user && (live || this.phase === 'yac')) {
-        this.defense.move(dt, this.userStick(), this.sprint);
+        this.defense.move(dt, this.userStick(), this.stamina.factor());
         continue;
       }
       if (p === this.defense.user && this.phase === 'presnap') {
@@ -1303,7 +1333,7 @@ export class FootballGame {
     const end = this.puntRet.tick(
       dt,
       this.userStick(),
-      this.sprint,
+      this.stamina.factor(),
       this.puntCover(),
       blockers
     );
@@ -1346,7 +1376,7 @@ export class FootballGame {
         dt,
         this.qb(),
         { x: this.stickX, z: this.stickZ },
-        this.sprint
+        this.stamina.factor()
       );
       return;
     }
@@ -1354,7 +1384,8 @@ export class FootballGame {
     if (run.juke !== 0) {
       this.yac.requestJuke(run.juke);
     }
-    this.yac.move(dt, this.qb(), run.stick, true);
+    // CPU carriers run a steady gear a little above a jog, no fatigue.
+    this.yac.move(dt, this.qb(), run.stick, 1.12);
   }
 
   private endYac(): void {
@@ -1385,6 +1416,7 @@ export class FootballGame {
     this.phase = 'presnap';
     this.clock = 0;
     this.whistleT = 0;
+    this.stamina.reset();
     this.yac.clear();
     this.open.clear();
     this.flight.clear();

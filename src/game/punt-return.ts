@@ -18,7 +18,6 @@ export const FIELD_HEIGHT = 2.4;
 export const RETURNER_DEPTH = 40;
 
 const RUN = 6.2;
-const SPRINT = 7.0;
 const COVER_SPEED = 6.5;
 const BLOCK_SPEED = 5.8;
 /** Settle after the catch before anyone can tackle. */
@@ -76,7 +75,7 @@ export class PuntReturn {
   tick(
     dt: number,
     stick: Vec2,
-    sprint: boolean,
+    sprint: number,
     cover: PlayerActor[],
     blockers: PlayerActor[]
   ): ReturnEnd {
@@ -140,7 +139,7 @@ export class PuntReturn {
     c: PlayerActor,
     dt: number,
     stick: Vec2,
-    sprint: boolean
+    sprint: number
   ): void {
     if (this.jukeT >= 0 && this.jukeT < JUKE_TIME) {
       this.jukeT += dt;
@@ -153,7 +152,7 @@ export class PuntReturn {
       return;
     }
     const len = Math.hypot(stick.x, stick.z);
-    const speed = sprint ? SPRINT : RUN;
+    const speed = RUN * sprint;
     if (len < 0.2) {
       // No input: keep running upfield (toward -z).
       c.chase({ x: c.x, z: c.z - 5 }, dt, speed);

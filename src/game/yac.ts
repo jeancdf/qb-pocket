@@ -11,11 +11,6 @@ import type { PlayerActor } from './players';
 import type { Vec2 } from './types';
 
 const QB_RUN_SPEED = 6.6;
-/** Shift: top-speed boost while the burst lasts. */
-const SPRINT_BOOST = 1.18;
-/** Seconds of full sprint, and refill per second when walking it off. */
-const SPRINT_TANK = 2.4;
-const SPRINT_REFILL = 0.5;
 /** Pause between two jukes. */
 const JUKE_COOLDOWN = 0.4;
 const TACKLE_SETTLE_TIME = 1.65;
@@ -67,8 +62,6 @@ export class YacRun {
   private jukeCool = 0;
   /** A press that came in during cooldown, replayed when ready. */
   private queued: { dir: number; t: number } | null = null;
-  /** Sprint fuel in seconds. */
-  sprintLeft = SPRINT_TANK;
 
   constructor(
     private readonly players: PlayerActor[],
@@ -89,7 +82,6 @@ export class YacRun {
     this.frontMissT = 0;
     this.jukeCool = 0;
     this.queued = null;
-    this.sprintLeft = SPRINT_TANK;
     this.dives.clear();
   }
 
@@ -155,7 +147,7 @@ export class YacRun {
     dt: number,
     qb: PlayerActor,
     stick: Vec2,
-    sprint: boolean
+    sprint: number
   ): void {
     const wr = this.carrier;
     if (!wr) {
@@ -165,8 +157,8 @@ export class YacRun {
       wr.updateRagdoll(dt);
       return;
     }
-    const top = this.carrierSpeed(wr === qb) *
-      this.sprintFactor(dt, sprint);
+    // `sprint` is the Shift multiplier (see SprintMeter).
+    const top = this.carrierSpeed(wr === qb) * sprint;
     if (this.state === 'plant' || this.state === 'cut') {
       this.footwork(wr, dt);
       return;
@@ -185,23 +177,6 @@ export class YacRun {
       z: wr.z + (stick.z / Math.max(1, length)) * 5
     };
     wr.chase(target, dt, top);
-  }
-
-  /** Spend the tank while Shift is held; refill slowly otherwise. */
-  private sprintFactor(dt: number, sprint: boolean): number {
-    if (sprint && this.sprintLeft > 0) {
-      this.sprintLeft = Math.max(0, this.sprintLeft - dt);
-      return SPRINT_BOOST;
-    }
-    this.sprintLeft = Math.min(
-      SPRINT_TANK,
-      this.sprintLeft + dt * SPRINT_REFILL
-    );
-    return 1;
-  }
-
-  sprinting(): boolean {
-    return this.sprintLeft > 0;
   }
 
   poseTackler(): void {

@@ -38,7 +38,6 @@ export const DEF_CALLS: DefCall[] = [
 const RUN_SPEED = 6.2;
 /** Before the snap: walk to a new alignment. */
 const SHIFT_SPEED = 3.2;
-const SPRINT_SPEED = 7.0;
 
 export class DefenseControl {
   /** Controlled defender, null on offense. */
@@ -120,8 +119,11 @@ export class DefenseControl {
     return p ? `#${p.def.number} ${p.def.label}` : '';
   }
 
-  /** Stick in world axes (already flipped for the defense camera). */
-  move(dt: number, stick: Vec2, sprint: boolean): void {
+  /**
+   * Stick in world axes (already flipped for the defense camera).
+   * `sprint` multiplies the run speed (see SprintMeter).
+   */
+  move(dt: number, stick: Vec2, sprint: number): void {
     const p = this.user;
     if (!p || p.isDown()) {
       return;
@@ -135,6 +137,6 @@ export class DefenseControl {
       x: p.x + (stick.x / Math.max(1, len)) * 5,
       z: p.z + (stick.z / Math.max(1, len)) * 5
     };
-    p.chase(to, dt, sprint ? SPRINT_SPEED : RUN_SPEED);
+    p.chase(to, dt, RUN_SPEED * sprint);
   }
 }
