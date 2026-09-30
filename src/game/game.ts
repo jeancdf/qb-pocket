@@ -232,7 +232,7 @@ export class FootballGame {
       return null;
     }
     const who = this.defense.label();
-    return `Tu joues ${who} (flèche dorée) · ZQSD bouger · Shift sprint · Tab / C changer de joueur`;
+    return `Tu joues ${who} (anneau doré) · ZQSD bouger · Shift sprint · Tab / C changer de joueur`;
   }
 
   /** On defense this possession (the CPU has the ball). */

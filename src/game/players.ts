@@ -124,8 +124,6 @@ export class PlayerActor {
   private fallSide = 0;
   private fallDir = 1;
   private ringMat: THREE.MeshBasicMaterial;
-  /** Gold arrow over the head of the defender the player runs. */
-  private readonly marker: THREE.Mesh;
 
   constructor(def: PlayerDef, mats: TeamMats) {
     this.def = def;
@@ -150,15 +148,6 @@ export class PlayerActor {
     this.ring.rotation.x = -Math.PI / 2;
     this.ring.position.y = 0.04;
     this.mesh.add(this.ring);
-    this.marker = new THREE.Mesh(
-      new THREE.ConeGeometry(0.28, 0.55, 12),
-      new THREE.MeshBasicMaterial({ color: 0xe8c547, depthTest: false })
-    );
-    this.marker.rotation.x = Math.PI;
-    this.marker.position.y = 2.25;
-    this.marker.renderOrder = 10;
-    this.marker.visible = false;
-    this.mesh.add(this.marker);
     if (def.pos === 'WR') {
       this.mesh.add(namePlate(def));
     }
@@ -241,7 +230,6 @@ export class PlayerActor {
     this.cover = 'idle';
     this.ringMat.color.setHex(on ? 0xe8c547 : RING_COL.idle);
     this.ringMat.opacity = on ? 0.95 : 0;
-    this.marker.visible = on;
   }
 
   /** Force a pose. Call after update() to override auto locomotion. */
