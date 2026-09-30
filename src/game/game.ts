@@ -1267,6 +1267,14 @@ export class FootballGame {
       this.madden.setPhase('throw');
     }
     const returner = this.byId.get('fs');
+    if (this.kicked && this.defending) {
+      this.puntRet.hang(
+        dt,
+        plan.landing,
+        this.puntCover(),
+        this.defenders().filter((p) => p !== returner)
+      );
+    }
     if (this.kicked && this.defending && returner && this.ball.inAir &&
         this.ball.pos.y < FIELD_HEIGHT &&
         xzDist(returner, this.ball.pos) < FIELD_RANGE) {
@@ -1294,6 +1302,10 @@ export class FootballGame {
   /** Gunners run under the kick, the returner goes to it. */
   private movePunt(p: PlayerActor, dt: number): void {
     const spot = this.punt?.landing;
+    if (this.defending && this.kicked && p.def.id !== 'fs') {
+      // CPU punt in the air: punt-return.ts runs coverage and blocks.
+      return;
+    }
     const cover = p.def.side === 'offense' &&
       p.def.pos !== 'OL' && p.def.pos !== 'QB';
     if (spot && this.kicked && cover) {
