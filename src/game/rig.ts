@@ -238,6 +238,8 @@ export interface RunDrive {
   tempo?: number;
   /** Per-player arm swing factor. */
   arms?: number;
+  /** 0–1 per player: small quirks in posture and stride wobble. */
+  seed?: number;
   /** Half the hip width of this rig (set by applyRun). */
   hip?: number;
 }
@@ -251,7 +253,8 @@ export function applyRun(
   const pose = runPose(phase, {
     ...drive,
     lean: -drive.lean,
-    hip: Math.abs(rig.leftThigh.position.x)
+    hip: Math.abs(rig.leftThigh.position.x),
+    seed: drive.seed ?? rig.seed
   });
   applyPose(rig, windUp(pose, drive.windup ?? 0, false), 'run');
 }
@@ -531,7 +534,7 @@ function runParams(d: RunDrive): RunParams {
   const hz = sweep > 1e-4 ? (speed * duty) / (sweep * SCALE) : baseHz;
   const heel = (0.03 + 0.06 * k) * (1 - 0.5 * pl) * (0.3 + 0.7 * fwd);
   // Shuffles keep the feet wide; once the hips open they cross over.
-  const wide = 0.1 * side * (1 - open) + 0.05 * guard;
+  const wide = 0.1 * side * (1 - open) + 0.05 * guard + 0.015 * fwd;
   const reach = (y: number, h: number) =>
     y + Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - h * h));
   const hEnd = Math.min(
@@ -584,7 +587,7 @@ interface FootAt {
  * arm drives forward. On the turf the ankle slides back at a constant
  * rate, exactly the body's speed.
  */
-function footPath(r: RunParams, f: number): FootAt {
+function footPath(r: RunParams, f: number, liftMul = 1): FootAt {
   const s = wrapAngle(f - Math.PI);
   const half = r.duty * Math.PI;
   const S = r.sweep;
@@ -607,7 +610,8 @@ function footPath(r: RunParams, f: number): FootAt {
   const e = smooth(clamp01((q - 0.12) / 0.8));
   const paw = (0.03 + 0.08 * r.k) * r.fwd *
     Math.sin(Math.PI * clamp01((q - 0.45) / 0.55));
-  const lift = r.lift * Math.pow(Math.sin(Math.PI * Math.pow(q, 0.8)), 1.2);
+  const lift = r.lift * liftMul *
+    Math.pow(Math.sin(Math.PI * Math.pow(q, 0.8)), 1.2);
   const heel0 = r.heel * (1 - q) * (1 - q);
   const toe0 = Math.atan2(r.heel, TOE);
   return {
@@ -670,11 +674,15 @@ function solveLeg(r: RunParams, foot: FootAt, f: LegFrame, outX: number) {
   const base = outX * (f.hip + r.wide);
   const bx = base * Math.cos(r.hipTurn) + foot.along * r.mx;
   const bz = base * Math.sin(r.hipTurn) + foot.along * r.mz;
-  let wx = bx - f.shift;
+  // A planted foot is fixed to the turf; a swinging one travels with
+  // its hip, so the pelvis sway and hip drop do not fling the knee out.
+  const free = foot.stance === null ? Math.sin(Math.PI * foot.swing) : 0;
+  let wx = bx - f.shift * (1 - free);
   let wy = foot.y - f.h;
   let wz = bz;
   // Level frame into pelvis frame: undo X, then Y, then Z.
-  const [px, py, pz] = f.pelvis;
+  const [px, py] = f.pelvis;
+  const pz = f.pelvis[2] * (1 - free);
   let c = Math.cos(-px);
   let sn = Math.sin(-px);
   [wy, wz] = [wy * c - wz * sn, wy * sn + wz * c];
@@ -700,7 +708,10 @@ function solveLeg(r: RunParams, foot: FootAt, f: LegFrame, outX: number) {
     (2 * THIGH * SHIN);
   const knee = Math.PI - Math.acos(clampUnit(cosKnee));
   const reachY = THIGH + SHIN * Math.cos(knee);
-  const roll = Math.asin(clampUnit(tx / Math.max(reachY, 1e-3)));
+  // A deeply folded swing leg has almost no vertical reach; rolling it
+  // by the full ratio would throw the knee across the body, so the
+  // roll is capped as if the leg were half straight.
+  const roll = Math.asin(clampUnit(tx / Math.max(reachY, 0.5 * LEG)));
   // In the rolled leg plane the ankle sits at (-reachY cos roll, -S sin k)
   // in (y, z); pitch that onto the target.
   const qy = -reachY * Math.cos(roll);
@@ -729,40 +740,66 @@ function runPose(phase: number, d: RunDrive): Pose {
   const prm = runParams(d);
   const { k, pl, pelvisX, torsoX } = prm;
   const ready = 1 - prm.fwd;
+  const run = prm.fwd;
   const guard = clamp01(d.guard ?? 0);
-  const arms = d.arms ?? 1;
+  const seed = d.seed ?? 0.5;
   const h = runHeight(prm, phase);
   const sw = Math.sin(phase);
+  const cw = Math.cos(phase);
+  // No two strides alike: smooth per-step wobble in the upper body and
+  // knee lift (swing only, so the planted foot never slips).
+  const wob = (lane: number) => stepNoise(phase, seed * 97 + lane);
   // Backpedals and shuffles keep the hands up in front, pumping short.
   const armAmp = (0.3 + 0.6 * k) * (1 - 0.4 * pl) *
-    (1 - 0.65 * ready) * (1 - guard) * arms;
-  const yaw = 0.12 * (0.4 + k) * sw * (1 - 0.6 * ready) * (1 - guard);
+    (1 - 0.65 * ready) * (1 - guard) * (d.arms ?? 1) * (1 + 0.1 * wob(1));
+  const yaw = 0.12 * (0.4 + k) * sw * (1 - 0.6 * ready) * (1 - guard) *
+    (1 + 0.15 * wob(2));
   const bank = d.lean;
   const up = -0.3 * ready;
-  const shift = 0.025 * sw * (1 - k * 0.5);
+  // The pelvis rides over the planted foot: it sways onto it, the free
+  // hip drops a little, and the whole body dips into each landing.
+  const shift = 0.03 * cw * (1 - 0.4 * k);
+  const drop = 0.05 * (0.5 + k) * cw * (1 - 0.5 * ready) * (1 - guard);
+  const dip = 0.035 * (0.3 + k) * Math.cos(2 * phase) * run;
   // Opened hips turn the pelvis (pose yaw is mirrored, so it flips);
   // the chest turns back to keep facing where the player looks.
-  const pelvis: XYZ = [pelvisX, -yaw - prm.hipTurn, bank * 0.6];
+  const pelvis: XYZ = [pelvisX, -yaw - prm.hipTurn, bank * 0.6 + drop];
   const frame: LegFrame = { pelvis, shift, h, hip: d.hip ?? 0.1 };
   // Left leg hangs on -X in the pose frame, right on +X.
-  const l = solveLeg(prm, footPath(prm, phase), frame, -1);
-  const r = solveLeg(prm, footPath(prm, phase + Math.PI), frame, 1);
+  const lLift = 1 + 0.1 * stepNoise(phase, seed * 53 + 7);
+  const rLift = 1 + 0.1 * stepNoise(phase + Math.PI, seed * 53 + 11);
+  const l = solveLeg(prm, footPath(prm, phase, lLift), frame, -1);
+  const r = solveLeg(prm, footPath(prm, phase + Math.PI, rLift), frame, 1);
+  // Arms trail the legs a touch and reach further forward than back;
+  // the elbow closes as the hand comes up and opens as it drives back,
+  // and the hand swings in toward the middle in front.
+  const sa = Math.sin(phase - 0.22);
+  const swing = armAmp * (sa - 0.15 * sa * Math.abs(sa));
+  const lean = 0.1 * (seed - 0.5);
+  const elbow = 1.38 - 0.12 * k + 0.1 * (seed - 0.5);
+  const open = 0.3 * run * (1 - guard);
+  const torso: XYZ = [torsoX + dip, yaw * 1.8 + prm.hipTurn,
+    bank * 0.45 - 0.8 * drop];
   const p: Pose = {
     pelvis,
-    torso: [torsoX, yaw * 1.8 + prm.hipTurn, bank * 0.45],
+    torso,
     lThigh: l.thigh,
     rThigh: r.thigh,
     lShin: l.knee,
     rShin: r.knee,
-    lArm: [0.1 + up + armAmp * sw, 0.1 * ready, -0.2 - 0.25 * pl - 0.12 * ready],
-    rArm: [0.1 + up - armAmp * sw, -0.1 * ready, 0.2 + 0.25 * pl + 0.12 * ready],
-    lFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, -sw) * (1 - ready) + 0.15 * ready,
-    rFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, sw) * (1 - ready) + 0.15 * ready,
-    lHand: [0.12, 0, 0.12],
-    rHand: [0.12, 0, -0.12],
+    lArm: [0.08 + up + lean + swing, 0.1 * ready - 0.08 * sa * run,
+      -0.24 - 0.25 * pl - 0.12 * ready + 0.1 * Math.max(0, -sa) * run],
+    rArm: [0.08 + up - lean - swing, -0.1 * ready - 0.08 * sa * run,
+      0.24 + 0.25 * pl + 0.12 * ready - 0.1 * Math.max(0, sa) * run],
+    lFore: elbow - open * sa + 0.15 * ready,
+    rFore: elbow + open * sa + 0.15 * ready,
+    lHand: [0.12 + 0.1 * sa, 0, 0.14],
+    rHand: [0.12 - 0.1 * sa, 0, -0.14],
     lFoot: l.foot,
     rFoot: r.foot,
-    neck: [0.06 - (pelvisX + torsoX) * 0.7, -yaw * 0.8, -bank * 0.7],
+    // Eyes stay level: the neck soaks up the chest's pitch, twist and roll.
+    neck: [0.06 - (pelvisX + torso[0]) * 0.75, -yaw * 0.8,
+      -bank * 0.7 - 0.2 * drop],
     hop: h - HIP,
     shift
   };
@@ -794,6 +831,20 @@ function runPose(phase: number, d: RunDrive): Pose {
     p.lArm = [p.lArm[0] - 0.15 * carry * sw, p.lArm[1], p.lArm[2]];
   }
   return p;
+}
+
+/**
+ * Smooth noise in -1..1 that picks a new value every step (half a
+ * gait cycle) and eases between them. `lane` separates channels.
+ */
+function stepNoise(phase: number, lane: number): number {
+  const u = phase / Math.PI;
+  const i = Math.floor(u);
+  const hash = (n: number) => {
+    const x = Math.sin(n * 127.1 + lane * 311.7) * 43758.5453;
+    return (x - Math.floor(x)) * 2 - 1;
+  };
+  return hash(i) + (hash(i + 1) - hash(i)) * smooth(u - i);
 }
 
 function mixXYZ(a: XYZ, b: XYZ, k: number): XYZ {
