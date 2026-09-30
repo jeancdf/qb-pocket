@@ -7,7 +7,11 @@ import {
   applyRun,
   applyScan,
   buildRig,
+  gripBall,
+  holdsBall,
+  lookAt,
   poseRig,
+  reachFor,
   runPhaseRate,
   type AnimKind,
   type PlayerRig,
@@ -44,6 +48,14 @@ const ARRIVE_DECEL = 11;
 const ARRIVED = 0.26;
 const FLOW_HIT = 0.55;
 const MIN_SPD = 0.4;
+/** How far a tackler drives through the carrier before going down (yd). */
+const TACKLE_DRIVE = 0.8;
+/** A ball closer than this (yd) draws the hands out to it. */
+const REACH_FROM = 2.4;
+/** Below this the feet stop stepping (yd/s). */
+const WALK_MIN = 0.35;
+/** Body turning faster than this on the spot takes pivot steps (rad/s). */
+const PIVOT_RATE = 1.6;
 
 export type { AnimKind, PlayerRig };
 
@@ -66,6 +78,32 @@ export class PlayerActor {
   /** 0–1 how far the ball is loaded up by the ear for a pass. */
   private windUp = 0;
   private windUpOn = false;
+  /** Where the QB is throwing: he squares up to it while he loads. */
+  private aim: Vec2 | null = null;
+  /** 0–1 ball tucked under the arm while running. */
+  private carry = 0;
+  /** 0–1 how close the rush is (QB only): quick feet in the pocket. */
+  private pressure = 0;
+  /** Where this frame started, to read motion others impose (line play). */
+  private frameX = 0;
+  private frameZ = 0;
+  private frameDt = 1 / 60;
+  private frameNo = 0;
+  private stepFrame = -1;
+  /** Turning rate of the body, rad/s (pivot steps in place). */
+  private turnRate = 0;
+  /** Head turned toward what the player is watching. */
+  private lookYaw = 0;
+  private lookPitch = 0;
+  /** 0–1 how far the hands are out for an incoming ball. */
+  private reaching = 0;
+  /** Tackle in progress: how far he has driven in and how far down. */
+  private tackleU = -1;
+  private lunge = 0;
+  private tackleFall = 0;
+  /** Per-player quirks, fixed for the game: tempo and arm swing. */
+  private readonly tempo: number;
+  private readonly armSwing: number;
   private plant = 0;
   private shiftZ = 0;
   private chasing = false;
@@ -97,6 +135,8 @@ export class PlayerActor {
     const built = buildRig(def, mats);
     this.mesh = built.root;
     this.rig = built.rig;
+    this.tempo = 0.95 + 0.1 * this.rig.seed;
+    this.armSwing = 0.85 + 0.3 * ((this.rig.seed * 7.31) % 1);
     this.ringMat = new THREE.MeshBasicMaterial({
       color: 0x000000,
       transparent: true,
@@ -137,6 +177,16 @@ export class PlayerActor {
     this.gait = 0;
     this.windUp = 0;
     this.windUpOn = false;
+    this.aim = null;
+    this.carry = 0;
+    this.pressure = 0;
+    this.turnRate = 0;
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+    this.reaching = 0;
+    this.tackleU = -1;
+    this.lunge = 0;
+    this.tackleFall = 0;
     this.plant = 0;
     this.chasing = false;
     this.offRoute = false;
@@ -196,17 +246,119 @@ export class PlayerActor {
 
   /** Force a pose. Call after update() to override auto locomotion. */
   setAnim(kind: AnimKind, t: number, speed: number): void {
+    if ((kind === 'passSet' || kind === 'rush') && this.shuffle()) {
+      return;
+    }
+    if (kind === 'tackle') {
+      this.tackleMotion(t);
+    }
     poseRig(this.rig, kind, t, speed);
   }
 
-  /** QB is charging a pass: bring the ball up by the ear. */
-  setWindUp(on: boolean): void {
-    this.windUpOn = on;
+  /**
+   * QB is charging a pass toward `spot` (null when not): the ball comes
+   * up by the ear and he squares his shoulders to the target.
+   */
+  setWindUp(spot: Vec2 | null): void {
+    this.windUpOn = spot !== null;
+    if (spot) {
+      this.aim = { x: spot.x, z: spot.z };
+    }
+  }
+
+  /** How close the rush is, 0–1 (drives the QB's feet in the pocket). */
+  setPressure(p: number): void {
+    this.pressure = Math.min(1, Math.max(0, p));
+  }
+
+  /**
+   * Turn the head toward a point (null: look where the body goes).
+   * Call once per frame after every pose write.
+   */
+  watch(target: THREE.Vector3 | null, dt: number): void {
+    if (this.ragdollT >= 0) {
+      return;
+    }
+    let yaw = 0;
+    let pitch = 0;
+    if (target) {
+      const dx = target.x - this.x;
+      const dz = target.z - this.z;
+      yaw = wrapPi(Math.atan2(dx, dz) - this.facing);
+      if (Math.abs(yaw) > 2.3) {
+        // Behind him: he cannot turn that far, so he lets it go.
+        yaw = 0;
+      }
+      const flat = Math.max(0.5, Math.hypot(dx, dz));
+      pitch = -Math.atan2(target.y - 1.75, flat);
+    }
+    const k = Math.min(1, dt * 7);
+    this.lookYaw += (yaw - this.lookYaw) * k;
+    this.lookPitch += (pitch - this.lookPitch) * k;
+    lookAt(this.rig, this.lookYaw, this.lookPitch);
+  }
+
+  /**
+   * Hands go out to meet a ball arriving at `ball` (null: none close).
+   * Call after watch(), once per frame.
+   */
+  reach(ball: THREE.Vector3 | null, dt: number): void {
+    if (this.ragdollT >= 0 || this.holdKind === 'catch') {
+      this.reaching = 0;
+      return;
+    }
+    let want = 0;
+    if (ball) {
+      const d = Math.hypot(ball.x - this.x, ball.y - 1.3, ball.z - this.z);
+      want = Math.min(1, Math.max(0, (REACH_FROM - d) / 1.3));
+    }
+    const rate = want > this.reaching ? 9 : 5;
+    this.reaching += (want - this.reaching) * Math.min(1, dt * rate);
+    if (ball && this.reaching > 0.01) {
+      reachFor(this.rig, ball, this.reaching);
+    }
+  }
+
+  /** The ball is in this player's hands. */
+  hasBall(): boolean {
+    return holdsBall(this.rig);
+  }
+
+  /**
+   * Line play moves blockers directly: when one is really travelling,
+   * swap the chop-in-place for a shuffle whose feet match the ground.
+   */
+  private shuffle(): boolean {
+    const dx = this.x - this.frameX;
+    const dz = this.z - this.frameZ;
+    const speed = Math.hypot(dx, dz) / Math.max(this.frameDt, 1e-4);
+    if (speed < 0.5 || this.ragdollT >= 0) {
+      return false;
+    }
+    const drive: RunDrive = {
+      speed,
+      lean: 0,
+      accel: 0,
+      plant: 0,
+      guard: 1,
+      heading: wrapPi(Math.atan2(dx, dz) - this.facing),
+      tempo: this.tempo
+    };
+    if (this.stepFrame !== this.frameNo) {
+      this.stepFrame = this.frameNo;
+      this.gait += this.frameDt * runPhaseRate(drive);
+    }
+    applyRun(this.rig, this.gait, drive);
+    return true;
   }
 
   /** Hold a throw/catch pose for a beat, then resume. */
   lockAnim(kind: AnimKind, seconds: number): void {
     this.dropping = false;
+    if (kind === 'tackle') {
+      this.tackleU = 0;
+      this.lunge = 0;
+    }
     this.holdKind = kind;
     this.holdDur = seconds;
     this.holdLeft = seconds;
@@ -262,9 +414,19 @@ export class PlayerActor {
       this.updateRagdoll(dt);
       return;
     }
+    if (this.tackleFall > 0 && this.holdKind !== 'tackle') {
+      // Went down with the carrier: stays down until the next snap.
+      poseRig(this.rig, 'tackle', 1, 0);
+      this.sync();
+      return;
+    }
     const ox = this.x;
     const oz = this.z;
     const of = this.facing;
+    this.frameX = ox;
+    this.frameZ = oz;
+    this.frameDt = dt;
+    this.frameNo += 1;
     if (live) {
       this.follow(dt);
     }
@@ -276,12 +438,26 @@ export class PlayerActor {
       this.facing = of;
       this.dropping = true;
     }
-    const turn = Math.abs(wrapPi(this.facing - of));
+    this.squareUp(dt);
+    const dTurn = wrapPi(this.facing - of);
+    const turn = Math.abs(dTurn);
     if (turn > 0.25) {
       this.plant = Math.max(this.plant, 0.1);
     }
+    this.turnRate += (dTurn / Math.max(dt, 1e-4) - this.turnRate) *
+      Math.min(1, dt * 10);
     this.sync();
     this.driveAnim(dt, live, speed);
+  }
+
+  /** While loading or releasing a pass, the QB turns to his target. */
+  private squareUp(dt: number): void {
+    const throwing = this.windUp > 0.05 || this.holdKind === 'throw';
+    if (!throwing || !this.aim) {
+      return;
+    }
+    const to = Math.atan2(this.aim.x - this.x, this.aim.z - this.z);
+    this.facing = headingLerp(this.facing, to, 9 * dt);
   }
 
   /** QB retreating from the line faces upfield while he drops. */
@@ -547,6 +723,9 @@ export class PlayerActor {
   ): void {
     const load = this.windUpOn ? 1 : 0;
     this.windUp += (load - this.windUp) * Math.min(1, dt * (load ? 12 : 8));
+    if (!this.windUpOn && this.holdKind !== 'throw') {
+      this.aim = null;
+    }
     if (this.tickHold(dt)) {
       return;
     }
@@ -570,14 +749,20 @@ export class PlayerActor {
       this.tickHold(dt);
       return;
     }
-    if (pos === 'QB' && (!live || speed < 1.5)) {
+    if (pos === 'QB' && (!live || speed < WALK_MIN) &&
+      Math.abs(this.turnRate) < PIVOT_RATE) {
       this.gait += dt;
-      applyScan(this.rig, live ? this.gait : 0, this.windUp);
+      applyScan(this.rig, live ? this.gait : 0, this.windUp, this.pressure);
       return;
     }
     const kind = autoKind(pos, live, speed);
     if (kind === 'run') {
       this.stepRun(dt, speed);
+      return;
+    }
+    if (kind === 'idle' && live && Math.abs(this.turnRate) > PIVOT_RATE) {
+      // Turning on the spot: little pivot steps instead of sliding.
+      this.stepRun(dt, 0.9, Math.sign(this.turnRate) * Math.PI / 2);
       return;
     }
     this.gait += dt * Math.max(speed, 1);
@@ -591,6 +776,9 @@ export class PlayerActor {
     }
     this.holdLeft -= dt;
     const u = 1 - this.holdLeft / Math.max(this.holdDur, 1e-3);
+    if (this.holdKind === 'tackle') {
+      this.tackleMotion(u);
+    }
     poseRig(this.rig, this.holdKind, u, 0);
     if (this.holdLeft <= 0) {
       this.holdKind = null;
@@ -618,11 +806,38 @@ export class PlayerActor {
     this.sync();
   }
 
+  /**
+   * Tackler's body during the wrap-up (u 0–1): drives through the
+   * carrier along his facing, then pitches forward and goes down on
+   * top of him instead of standing over the fall.
+   */
+  private tackleMotion(u: number): void {
+    if (this.tackleU < 0) {
+      this.tackleU = 0;
+      this.lunge = 0;
+    }
+    this.tackleU = Math.max(this.tackleU, u);
+    const w = this.tackleU;
+    const to = TACKLE_DRIVE * Math.sin(Math.PI / 2 * Math.min(1, w / 0.6));
+    this.x += Math.sin(this.facing) * (to - this.lunge);
+    this.z += Math.cos(this.facing) * (to - this.lunge);
+    this.lunge = to;
+    const f = Math.min(1, Math.max(0, (w - 0.35) / 0.6));
+    this.tackleFall = (Math.PI / 2 - 0.2) * (1 - Math.pow(1 - f, 3));
+    this.sync();
+  }
+
   private sync(): void {
     this.mesh.position.x = this.x;
     this.mesh.position.z = this.z;
+    if (this.tackleFall > 0) {
+      const k = this.tackleFall / (Math.PI / 2);
+      this.mesh.position.y = 0.18 * k;
+      this.mesh.rotation.set(this.tackleFall, this.facing, 0, 'YXZ');
+      return;
+    }
     this.mesh.position.y = 0;
-    this.mesh.rotation.set(0, this.facing, 0);
+    this.mesh.rotation.set(0, this.facing, 0, 'XYZ');
   }
 
   /** Hitch / duplicate waypoint: brake in instead of flowing. */
@@ -674,8 +889,21 @@ export class PlayerActor {
    * on the turf for this stride (see runPhaseRate): about 3 steps/s
    * jogging to 5 at full sprint, stride length doing the rest.
    */
-  private stepRun(dt: number, speed: number): void {
+  private stepRun(dt: number, speed: number, heading?: number): void {
     const plant = Math.min(1, this.plant / PLANT_T);
+    const moving = Math.hypot(this.vx, this.vz) > 0.2;
+    const dx = this.x - this.frameX;
+    const dz = this.z - this.frameZ;
+    const travel = moving
+      ? Math.atan2(this.vx, this.vz)
+      : Math.hypot(dx, dz) > 1e-4 ? Math.atan2(dx, dz) : this.facing;
+    // Ball carriers tuck it away; the QB keeps it at his chest in the
+    // pocket and only tucks once he takes off.
+    const hasBall = holdsBall(this.rig);
+    const pocket = this.def.pos === 'QB' && speed < 3.5;
+    const tuck = hasBall && !pocket ? 1 : 0;
+    this.carry += (tuck - this.carry) * Math.min(1, dt * 10);
+    gripBall(this.rig, this.carry > 0.5 && this.windUp < 0.3);
     this.cutLean *= Math.max(0, 1 - dt * 6);
     // Get low when the feet work hard: driving, braking or bending the
     // path (lateral yd/s²). Drop fast, rise back slowly at cruise.
@@ -691,7 +919,12 @@ export class PlayerActor {
       accel: this.runAccel,
       plant,
       crouch: this.crouch,
-      windup: this.windUp
+      windup: this.windUp,
+      heading: heading ?? wrapPi(travel - this.facing),
+      carry: this.carry,
+      chest: hasBall && pocket ? 1 : 0,
+      tempo: this.tempo,
+      arms: this.armSwing
     };
     this.gait += dt * runPhaseRate(drive);
     applyRun(this.rig, this.gait, drive);
@@ -795,7 +1028,7 @@ function autoKind(
   if (pos === 'DL') {
     return 'rush';
   }
-  if (speed > 1.5) {
+  if (speed > WALK_MIN) {
     return 'run';
   }
   return 'idle';
@@ -828,7 +1061,7 @@ function namePlate(def: PlayerDef): THREE.Sprite {
     depthWrite: false
   });
   const s = new THREE.Sprite(mat);
-  s.position.set(0, 2.72, 0);
+  s.position.set(0, 2.4, 0);
   s.scale.set(1.35, 0.34, 1);
   s.center.set(0.5, 0);
   return s;

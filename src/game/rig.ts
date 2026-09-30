@@ -28,6 +28,8 @@ export type AnimKind =
 
 export interface PlayerRig {
   pos: Pos;
+  /** 0–1, fixed per player: small differences in rhythm and stance. */
+  seed: number;
   pelvis: THREE.Group;
   torso: THREE.Group;
   neck: THREE.Group;
@@ -120,6 +122,7 @@ export function buildRig(
   const rLeg = leg(-hx);
   const rig: PlayerRig = {
     pos: def.pos,
+    seed: hashSeed(def.id),
     pelvis,
     torso,
     neck,
@@ -141,6 +144,15 @@ export function buildRig(
   addHit(root, def.id);
   applyPose(rig, idlePose(def.pos), 'idle');
   return { root, rig };
+}
+
+/** Stable 0–1 value from a player id. */
+function hashSeed(id: string): number {
+  let h = 2166136261;
+  for (let i = 0; i < id.length; i++) {
+    h = Math.imul(h ^ id.charCodeAt(i), 16777619);
+  }
+  return ((h >>> 0) % 10007) / 10007;
 }
 
 function joint(parent: THREE.Object3D, x: number, y: number): THREE.Group {
@@ -189,7 +201,7 @@ function kindTarget(
     case 'plant':
       return plantPose(t);
     default:
-      return kindPose(kind, t, speed, rig.pos);
+      return kindPose(kind, t, speed, rig.pos, rig.seed);
   }
 }
 
@@ -211,6 +223,23 @@ export interface RunDrive {
   crouch?: number;
   /** 0–1 while a pass is being charged: ball comes up by the ear. */
   windup?: number;
+  /**
+   * Direction of travel relative to where the chest faces, radians:
+   * 0 forward, pi backpedal, + toward the player's left.
+   */
+  heading?: number;
+  /** 0–1 ball tucked under the right arm. */
+  carry?: number;
+  /** 0–1 ball held at the chest in both hands (QB in the pocket). */
+  chest?: number;
+  /** 0–1 blocker stance: low, wide, hands up. */
+  guard?: number;
+  /** Per-player cadence factor (about 0.95–1.05). */
+  tempo?: number;
+  /** Per-player arm swing factor. */
+  arms?: number;
+  /** Half the hip width of this rig (set by applyRun). */
+  hip?: number;
 }
 
 export function applyRun(
@@ -219,7 +248,11 @@ export function applyRun(
   drive: RunDrive
 ): void {
   // Mirrored in setPose, so a side-dependent input flips going in.
-  const pose = runPose(phase, { ...drive, lean: -drive.lean });
+  const pose = runPose(phase, {
+    ...drive,
+    lean: -drive.lean,
+    hip: Math.abs(rig.leftThigh.position.x)
+  });
   applyPose(rig, windUp(pose, drive.windup ?? 0, false), 'run');
 }
 
@@ -227,9 +260,116 @@ export function applyHitch(rig: PlayerRig): void {
   applyPose(rig, hitchPose(), 'hitch');
 }
 
-/** `windup` 0–1 loads the pass up by the ear (see windUp). */
-export function applyScan(rig: PlayerRig, t: number, windup = 0): void {
-  applyPose(rig, windUp(qbScan(t), windup, true), 'scan');
+/**
+ * `windup` 0–1 loads the pass up by the ear (see windUp); `pressure`
+ * 0–1 quickens the feet.
+ */
+export function applyScan(
+  rig: PlayerRig,
+  t: number,
+  windup = 0,
+  pressure = 0
+): void {
+  applyPose(rig, windUp(qbScan(t, pressure), windup, true), 'scan');
+}
+
+const reachTmp = new THREE.Vector3();
+const sideTmp = new THREE.Vector3();
+
+/**
+ * Both hands go to meet the ball at `point` (world), thumbs or little
+ * fingers together, blended over the pose set this frame by `amount`.
+ * Two-bone IK per arm in the chest frame; past arm's length the arms
+ * simply point at it.
+ */
+export function reachFor(
+  rig: PlayerRig,
+  point: THREE.Vector3,
+  amount: number
+): void {
+  const k = clamp01(amount);
+  if (k <= 0) {
+    return;
+  }
+  rig.torso.updateWorldMatrix(true, false);
+  // The player's left, in world space, to split the hands.
+  sideTmp.set(1, 0, 0).transformDirection(rig.torso.matrixWorld);
+  const arms: [THREE.Group, THREE.Group, number][] = [
+    [rig.leftArm, rig.leftFore, 1],
+    [rig.rightArm, rig.rightFore, -1]
+  ];
+  for (const [arm, fore, side] of arms) {
+    reachTmp.copy(point).addScaledVector(sideTmp, 0.07 * side);
+    rig.torso.worldToLocal(reachTmp).sub(arm.position);
+    let [tx, ty, tz] = [reachTmp.x, reachTmp.y, reachTmp.z];
+    const len = Math.hypot(tx, ty, tz);
+    const max = 0.99 * (UPPER + FORE);
+    // Aim the wrist a palm's width short of the ball.
+    const want = Math.min(max, Math.max(0.12, len - 0.06));
+    tx *= want / Math.max(len, 1e-4);
+    ty *= want / Math.max(len, 1e-4);
+    tz *= want / Math.max(len, 1e-4);
+    const cosEl = (UPPER * UPPER + FORE * FORE - want * want) /
+      (2 * UPPER * FORE);
+    const elbow = Math.PI - Math.acos(clampUnit(cosEl));
+    const reachY = UPPER + FORE * Math.cos(elbow);
+    const roll = Math.asin(clampUnit(tx / Math.max(reachY, 1e-3)));
+    const pitch = Math.atan2(tz, ty) -
+      Math.atan2(FORE * Math.sin(elbow), -reachY * Math.cos(roll));
+    const r = arm.rotation;
+    r.set(
+      r.x + wrapAngle(pitch - r.x) * k,
+      r.y * (1 - k),
+      r.z + (roll - r.z) * k
+    );
+    fore.rotation.x += (-elbow - fore.rotation.x) * k;
+  }
+}
+
+/**
+ * Turn the head toward what the player watches, on top of whatever
+ * pose was set this frame: the neck takes most of it, the chest the
+ * rest. `yaw` is toward the player's left, `pitch` + looks down.
+ */
+export function lookAt(rig: PlayerRig, yaw: number, pitch: number): void {
+  const neck = rig.neck.userData.base as XYZ | undefined;
+  const torso = rig.torso.userData.base as XYZ | undefined;
+  if (!neck || !torso) {
+    return;
+  }
+  const head = Math.max(-1.1, Math.min(1.1, yaw));
+  const chest = Math.max(-0.45, Math.min(0.45, yaw - head));
+  const nod = Math.max(-0.5, Math.min(0.6, pitch));
+  rig.neck.rotation.set(neck[0] + nod * 0.8, neck[1] + head, neck[2]);
+  rig.torso.rotation.set(torso[0], torso[1] + chest, torso[2]);
+}
+
+function ballIn(hand: THREE.Object3D): THREE.Object3D | undefined {
+  return hand.children.find((c) => c.userData.football);
+}
+
+/** The ball is in this player's right hand. */
+export function holdsBall(rig: PlayerRig): boolean {
+  return ballIn(rig.rightHand) !== undefined;
+}
+
+/**
+ * Seat the ball in the right hand: tucked runs it along the forearm,
+ * nose in the palm and the body against the ribs; otherwise it sits
+ * in the fingers, ready to throw or hand off.
+ */
+export function gripBall(rig: PlayerRig, tucked: boolean): void {
+  const ball = ballIn(rig.rightHand);
+  if (!ball) {
+    return;
+  }
+  if (tucked) {
+    ball.position.set(-0.02, 0.1, 0.05);
+    ball.rotation.set(0, 0, Math.PI / 2);
+  } else {
+    ball.position.set(0.01, -0.05, 0.02);
+    ball.rotation.set(0.4, 0.2, 1.2);
+  }
 }
 
 /** Every write goes through the transition blender (see pose-blend). */
@@ -249,6 +389,9 @@ function setPose(rig: PlayerRig, pose: Pose): void {
   rig.pelvis.position.set(-pose.shift, HIP + pose.hop, 0);
   m(rig.torso, pose.torso);
   m(rig.neck, pose.neck);
+  // What lookAt turns the head from (the pose, not last frame's look).
+  rig.torso.userData.base = rig.torso.rotation.toArray().slice(0, 3);
+  rig.neck.userData.base = rig.neck.rotation.toArray().slice(0, 3);
   // Pose thighs use + for hip flexion (knee forward); the joint's +X
   // swings the leg backward, so flip it here.
   m(rig.leftThigh, pose.lThigh, -pose.lThigh[0]);
@@ -286,14 +429,15 @@ function idlePose(pos: Pos): Pose {
 }
 
 /**
- * Sprint mechanics per leg phase φ (right leg runs half a cycle
- * behind): hip swings from extension at toe-off to high knee in front,
- * the heel folds up under the hip during swing, the knee loads at
- * mid-stance, the ankle pushes off. Arms counter the legs with bent
- * elbows, shoulders counter-rotate the hips, and the head stays level.
- * Speed scales amplitude; acceleration and braking tilt the body; turns
- * bank the whole runner; a planted cut sinks the hips and shortens the
- * stride.
+ * Run cycle, built on leg IK. Each ankle follows a path: on the turf
+ * it slides back under the hips at exactly the body's speed (so the
+ * planted foot stays put), in the air it folds up behind, drives
+ * through and paws back down. The path runs along the direction of
+ * travel relative to the chest, so the same cycle gives a forward run,
+ * a backpedal, a side shuffle (feet wide, never crossing) or a slow
+ * walk. Arms counter the legs, shoulders counter-rotate the hips;
+ * acceleration and braking tilt the body, turns bank it, a planted cut
+ * sinks the hips and shortens the stride.
  */
 interface RunParams {
   k: number;
@@ -303,6 +447,13 @@ interface RunParams {
   low: number;
   pelvisX: number;
   torsoX: number;
+  /** Direction of travel in the pose frame (x left-negative, z fwd). */
+  mx: number;
+  mz: number;
+  /** How much of the travel runs along the hips (1 = straight ahead). */
+  fwd: number;
+  /** Hips turned toward the run, radians toward the player's left. */
+  hipTurn: number;
   /** Fraction of a cycle each foot spends on the turf. */
   duty: number;
   /** Distance the planted foot travels under the hips, rig units. */
@@ -319,12 +470,16 @@ interface RunParams {
   lift: number;
   /** Heel rise at toe-off, rig units. */
   heel: number;
+  /** Extra stance width each side (shuffles and guard stance). */
+  wide: number;
 }
 
 const LEG = THIGH + SHIN;
 /** Ankle-to-toe lever the heel pivots on at toe-off. */
 const TOE = 0.2;
 const GRAVITY_RIG = 10.7 / SCALE;
+/** Furthest the hips open toward the run under a facing chest. */
+const HIP_OPEN = 1.35;
 
 function runParams(d: RunDrive): RunParams {
   const speed = Math.max(0, d.speed);
@@ -333,29 +488,56 @@ function runParams(d: RunDrive): RunParams {
   const push = Math.max(0, drive);
   const brake = Math.max(0, -drive);
   const pl = clamp01(d.plant);
-  const low = clamp01(d.crouch ?? 0);
+  const guard = clamp01(d.guard ?? 0);
+  let low = Math.max(clamp01(d.crouch ?? 0), guard);
+  // Heading is measured toward the player's left; the pose frame has
+  // his left on -X (setPose mirrors it onto the rig).
+  const hd = wrapAngle(d.heading ?? 0);
+  const mx = -Math.sin(hd);
+  const mz = Math.cos(hd);
+  // Moving fast across or away from where the chest faces, the hips
+  // open toward the run (a crossover) while the chest stays on target.
+  const open = smooth(clamp01((speed - 2.2) / 2)) *
+    clamp01((Math.abs(hd) - 0.35) / 0.5);
+  const hipTurn = Math.sign(hd) * Math.min(HIP_OPEN, Math.abs(hd)) * open;
+  const rel = hd - hipTurn;
+  const fwd = Math.max(0, Math.cos(rel));
+  const back = Math.max(0, -Math.cos(rel));
+  const side = Math.abs(Math.sin(rel));
+  // Pedalling or shuffling, a defender sits in an athletic stance.
+  low = Math.max(low, 0.65 * clamp01(back + side));
+  const tempo = d.tempo ?? 1;
   const pelvisX =
-    0.05 + 0.08 * k + 0.16 * push - 0.14 * brake + 0.12 * pl + 0.14 * low;
+    (0.05 + 0.08 * k + 0.16 * push - 0.14 * brake) * (0.4 + 0.6 * fwd) +
+    0.12 * pl + 0.14 * low + 0.12 * back;
   const torsoX =
-    0.05 + 0.1 * k + 0.24 * push - 0.12 * brake + 0.14 * pl + 0.16 * low;
+    (0.05 + 0.1 * k + 0.24 * push - 0.12 * brake) * (0.4 + 0.6 * fwd) +
+    0.14 * pl + 0.16 * low + 0.04 * back;
   // Real runners: cadence climbs gently (about 2.6 to 4.8 steps/s),
   // ground contact shrinks from half the cycle to under a quarter.
-  const baseHz = (0.85 + 0.16 * speed) * (1 - 0.35 * pl) * (1 + 0.15 * brake);
+  const baseHz = (0.85 + 0.16 * speed) * (1 - 0.35 * pl) *
+    (1 + 0.15 * brake) * tempo;
   const duty = Math.min(
     0.72,
-    Math.max(0.2, 0.56 - 0.05 * speed) * (1 + 0.5 * pl + 0.2 * brake)
+    Math.max(0.2, 0.56 - 0.05 * speed) *
+      (1 + 0.5 * pl + 0.2 * brake) +
+      0.12 * Math.max(side, back)
   );
   // The legs only reach so far; past that the feet turn over faster.
-  const maxSweep = (0.85 + 0.1 * low - 0.15 * pl) * LEG;
+  // Backpedals and shuffles take short steps (a shuffle never crosses).
+  const maxSweep = (0.85 + 0.1 * low - 0.15 * pl) * LEG *
+    (1 - 0.4 * side * (1 - open)) * (1 - 0.2 * back);
   const sweep = Math.min((speed * duty) / baseHz / SCALE, maxSweep);
   const hz = sweep > 1e-4 ? (speed * duty) / (sweep * SCALE) : baseHz;
-  const heel = (0.03 + 0.06 * k) * (1 - 0.5 * pl);
-  const reach = (y: number, z: number) =>
-    y + Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - z * z));
+  const heel = (0.03 + 0.06 * k) * (1 - 0.5 * pl) * (0.3 + 0.7 * fwd);
+  // Shuffles keep the feet wide; once the hips open they cross over.
+  const wide = 0.1 * side * (1 - open) + 0.05 * guard;
+  const reach = (y: number, h: number) =>
+    y + Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - h * h));
   const hEnd = Math.min(
     HIP - 0.02 - 0.015 * k - 0.1 * low - 0.06 * pl - 0.03 * brake,
-    reach(ANKLE_H, sweep / 2),
-    reach(ANKLE_H + heel, sweep / 2)
+    reach(ANKLE_H, Math.hypot(sweep / 2, wide)),
+    reach(ANKLE_H + heel, Math.hypot(sweep / 2, wide))
   );
   const air = Math.max(0, 0.5 - duty) / hz;
   return {
@@ -366,20 +548,26 @@ function runParams(d: RunDrive): RunParams {
     low,
     pelvisX,
     torsoX,
+    mx,
+    mz,
+    fwd,
+    hipTurn,
     duty,
     sweep,
     hz,
     hEnd,
     comp: 0.012 + 0.02 * k + 0.03 * low,
     rise: Math.min(0.06, (1.4 * GRAVITY_RIG * air * air) / 8),
-    lift: (0.06 + 0.42 * k) * (1 - 0.5 * pl) * (1 - 0.3 * low),
-    heel
+    lift: (0.06 + 0.42 * k) * (1 - 0.5 * pl) * (1 - 0.3 * low) *
+      (0.3 + 0.7 * fwd),
+    heel,
+    wide
   };
 }
 
 interface FootAt {
-  /** Ankle forward of the hip joint, rig units. */
-  z: number;
+  /** Ankle offset from the hip joint along the travel line, rig units. */
+  along: number;
   /** Ankle height above the turf. */
   y: number;
   /** Pose toe-down angle. */
@@ -391,9 +579,10 @@ interface FootAt {
 }
 
 /**
- * Where the ankle is at leg phase `f`. Mid-stance sits at f = pi, so the
- * left leg (phase) plants as the right arm drives forward. On the turf
- * the ankle slides back at a constant rate, exactly the body's speed.
+ * Where the ankle is at leg phase `f`, along the travel line. Mid-
+ * stance sits at f = pi, so the left leg (phase) plants as the right
+ * arm drives forward. On the turf the ankle slides back at a constant
+ * rate, exactly the body's speed.
  */
 function footPath(r: RunParams, f: number): FootAt {
   const s = wrapAngle(f - Math.PI);
@@ -404,7 +593,7 @@ function footPath(r: RunParams, f: number): FootAt {
     const up = Math.max(0, (t - 0.25) / 0.75);
     const y = ANKLE_H + r.heel * up * up;
     return {
-      z: (-t * S) / 2,
+      along: (-t * S) / 2,
       y,
       toe: Math.atan2(y - ANKLE_H, TOE),
       stance: t,
@@ -416,13 +605,14 @@ function footPath(r: RunParams, f: number): FootAt {
   // Heel folds up behind first, then the knee drives the foot through
   // and it paws back under the hips just before contact.
   const e = smooth(clamp01((q - 0.12) / 0.8));
-  const paw = (0.03 + 0.08 * r.k) * Math.sin(Math.PI * clamp01((q - 0.45) / 0.55));
+  const paw = (0.03 + 0.08 * r.k) * r.fwd *
+    Math.sin(Math.PI * clamp01((q - 0.45) / 0.55));
   const lift = r.lift * Math.pow(Math.sin(Math.PI * Math.pow(q, 0.8)), 1.2);
   const heel0 = r.heel * (1 - q) * (1 - q);
   const toe0 = Math.atan2(r.heel, TOE);
   return {
-    z: -S / 2 + S * e + paw,
-    y: ANKLE_H + heel0 + lift + 0.015 * r.k * q,
+    along: -S / 2 + S * e + paw,
+    y: ANKLE_H + heel0 + lift + (0.012 + 0.015 * r.k) * Math.sin(Math.PI * q),
     toe: toe0 * (1 - smooth(clamp01(q / 0.5))) -
       0.15 * smooth(clamp01((q - 0.6) / 0.4)),
     stance: null,
@@ -441,8 +631,9 @@ function runHeight(r: RunParams, phase: number): number {
     }
     airborne = false;
     const t = foot.stance;
+    const flat = Math.hypot(foot.along, r.wide);
     const ceil = foot.y +
-      Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - foot.z * foot.z));
+      Math.sqrt(Math.max(0, (0.985 * LEG) ** 2 - flat * flat));
     h = Math.min(h, ceil, r.hEnd - r.comp * (1 - t * t));
   }
   if (airborne) {
@@ -457,26 +648,66 @@ function runHeight(r: RunParams, phase: number): number {
   return h;
 }
 
-/** Two-bone IK in the leg's sagittal plane, pose convention angles. */
-function solveLeg(r: RunParams, foot: FootAt, h: number) {
-  const z = foot.z;
-  let dy = h - foot.y;
-  let dist = Math.hypot(z, dy);
+interface LegFrame {
+  /** Pelvis pose rotation (pose frame, before the mirror). */
+  pelvis: XYZ;
+  /** Pelvis side shift and height above the turf. */
+  shift: number;
+  h: number;
+  /** Half the distance between the hip joints. */
+  hip: number;
+}
+
+/**
+ * Two-bone leg IK. The ankle target sits in the level ground frame
+ * (so the planted foot stays put however the pelvis pitches, twists,
+ * banks or sways); it is moved into the pelvis frame, the knee angle
+ * comes from the hip-ankle distance, then the leg plane rolls out to
+ * the ankle's side and pitches to reach it.
+ */
+function solveLeg(r: RunParams, foot: FootAt, f: LegFrame, outX: number) {
+  // Where this foot lands under the (possibly opened) hips.
+  const base = outX * (f.hip + r.wide);
+  const bx = base * Math.cos(r.hipTurn) + foot.along * r.mx;
+  const bz = base * Math.sin(r.hipTurn) + foot.along * r.mz;
+  let wx = bx - f.shift;
+  let wy = foot.y - f.h;
+  let wz = bz;
+  // Level frame into pelvis frame: undo X, then Y, then Z.
+  const [px, py, pz] = f.pelvis;
+  let c = Math.cos(-px);
+  let sn = Math.sin(-px);
+  [wy, wz] = [wy * c - wz * sn, wy * sn + wz * c];
+  c = Math.cos(-py);
+  sn = Math.sin(-py);
+  [wx, wz] = [wx * c + wz * sn, -wx * sn + wz * c];
+  c = Math.cos(-pz);
+  sn = Math.sin(-pz);
+  [wx, wy] = [wx * c - wy * sn, wx * sn + wy * c];
+  let tx = wx - outX * f.hip;
+  let ty = wy;
+  let tz = wz;
   const max = 0.995 * LEG;
-  if (dist > max) {
-    // Out of reach: let the foot hang a touch off its path.
-    dy = Math.sqrt(Math.max(0, max * max - z * z));
-    dist = max;
+  const len = Math.hypot(tx, ty, tz);
+  if (len > max) {
+    // Out of reach: the foot hangs a touch short of its path.
+    tx *= max / len;
+    ty *= max / len;
+    tz *= max / len;
   }
-  dist = Math.max(dist, 0.3 * LEG);
+  const dist = Math.max(Math.min(len, max), 0.3 * LEG);
   const cosKnee = (THIGH * THIGH + SHIN * SHIN - dist * dist) /
     (2 * THIGH * SHIN);
   const knee = Math.PI - Math.acos(clampUnit(cosKnee));
-  const cosHip = (THIGH * THIGH + dist * dist - SHIN * SHIN) /
-    (2 * THIGH * dist);
-  const thigh = Math.atan2(z, dy) + Math.acos(clampUnit(cosHip));
+  const reachY = THIGH + SHIN * Math.cos(knee);
+  const roll = Math.asin(clampUnit(tx / Math.max(reachY, 1e-3)));
+  // In the rolled leg plane the ankle sits at (-reachY cos roll, -S sin k)
+  // in (y, z); pitch that onto the target.
+  const qy = -reachY * Math.cos(roll);
+  const qz = -SHIN * Math.sin(knee);
+  const pitch = Math.atan2(tz, ty) - Math.atan2(qz, qy);
   return {
-    hip: r.pelvisX + thigh,
+    thigh: [-wrapAngle(pitch), 0, roll] as XYZ,
     knee,
     foot: foot.toe
   };
@@ -490,37 +721,84 @@ export function runPhaseRate(d: RunDrive): number {
   return runParams(d).hz * Math.PI * 2;
 }
 
+/** Ball tucked high and tight: elbow in, forearm over the ribs. */
+const TUCK_ARM: XYZ = [0.24, -0.56, -0.01];
+const TUCK_FORE = 2.14;
+
 function runPose(phase: number, d: RunDrive): Pose {
   const prm = runParams(d);
   const { k, pl, pelvisX, torsoX } = prm;
+  const ready = 1 - prm.fwd;
+  const guard = clamp01(d.guard ?? 0);
+  const arms = d.arms ?? 1;
   const h = runHeight(prm, phase);
-  const l = solveLeg(prm, footPath(prm, phase), h);
-  const r = solveLeg(prm, footPath(prm, phase + Math.PI), h);
   const sw = Math.sin(phase);
-  const armAmp = (0.3 + 0.6 * k) * (1 - 0.4 * pl);
-  const yaw = 0.12 * (0.4 + k) * sw;
+  // Backpedals and shuffles keep the hands up in front, pumping short.
+  const armAmp = (0.3 + 0.6 * k) * (1 - 0.4 * pl) *
+    (1 - 0.65 * ready) * (1 - guard) * arms;
+  const yaw = 0.12 * (0.4 + k) * sw * (1 - 0.6 * ready) * (1 - guard);
   const bank = d.lean;
+  const up = -0.3 * ready;
+  const shift = 0.025 * sw * (1 - k * 0.5);
+  // Opened hips turn the pelvis (pose yaw is mirrored, so it flips);
+  // the chest turns back to keep facing where the player looks.
+  const pelvis: XYZ = [pelvisX, -yaw - prm.hipTurn, bank * 0.6];
+  const frame: LegFrame = { pelvis, shift, h, hip: d.hip ?? 0.1 };
+  // Left leg hangs on -X in the pose frame, right on +X.
+  const l = solveLeg(prm, footPath(prm, phase), frame, -1);
+  const r = solveLeg(prm, footPath(prm, phase + Math.PI), frame, 1);
   const p: Pose = {
-    pelvis: [pelvisX, -yaw, bank * 0.6],
-    torso: [torsoX, yaw * 1.8, bank * 0.45],
-    lThigh: [l.hip, 0, 0.02],
-    rThigh: [r.hip, 0, -0.02],
+    pelvis,
+    torso: [torsoX, yaw * 1.8 + prm.hipTurn, bank * 0.45],
+    lThigh: l.thigh,
+    rThigh: r.thigh,
     lShin: l.knee,
     rShin: r.knee,
-    lArm: [0.1 + armAmp * sw, 0, -0.2 - 0.25 * pl],
-    rArm: [0.1 - armAmp * sw, 0, 0.2 + 0.25 * pl],
-    lFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, -sw),
-    rFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, sw),
+    lArm: [0.1 + up + armAmp * sw, 0.1 * ready, -0.2 - 0.25 * pl - 0.12 * ready],
+    rArm: [0.1 + up - armAmp * sw, -0.1 * ready, 0.2 + 0.25 * pl + 0.12 * ready],
+    lFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, -sw) * (1 - ready) + 0.15 * ready,
+    rFore: 1.2 + 0.2 * k + 0.35 * Math.max(0, sw) * (1 - ready) + 0.15 * ready,
     lHand: [0.12, 0, 0.12],
     rHand: [0.12, 0, -0.12],
     lFoot: l.foot,
     rFoot: r.foot,
     neck: [0.06 - (pelvisX + torsoX) * 0.7, -yaw * 0.8, -bank * 0.7],
-    // A banked pelvis tilts the legs; sink so the planted foot stays down.
-    hop: h - HIP - (h - ANKLE_H) * (1 - Math.cos(bank * 0.6)),
-    shift: 0.025 * sw * (1 - k * 0.5)
+    hop: h - HIP,
+    shift
   };
+  if (guard > 0) {
+    // Blocker's punch position: hands up and inside, elbows bent.
+    p.lArm = mixXYZ(p.lArm, [-0.42 + torsoX, 0.12, -0.82], guard);
+    p.rArm = mixXYZ(p.rArm, [-0.42 + torsoX, -0.12, 0.82], guard);
+    p.lFore += (1.08 - p.lFore) * guard;
+    p.rFore += (1.08 - p.rFore) * guard;
+  }
+  const chest = clamp01(d.chest ?? 0);
+  if (chest > 0) {
+    // Both hands stay on the ball in front of the chest.
+    const rest = qbIdle();
+    p.lArm = mixXYZ(p.lArm, [rest.lArm[0] + torsoX, rest.lArm[1], rest.lArm[2]], chest);
+    p.rArm = mixXYZ(p.rArm, [rest.rArm[0] + torsoX, rest.rArm[1], rest.rArm[2]], chest);
+    p.lFore += (rest.lFore - p.lFore) * chest;
+    p.rFore += (rest.rFore - p.rFore) * chest;
+    p.lHand = mixXYZ(p.lHand, rest.lHand, chest);
+    p.rHand = mixXYZ(p.rHand, rest.rHand, chest);
+  }
+  const carry = clamp01(d.carry ?? 0);
+  if (carry > 0) {
+    // Only the free arm keeps pumping; the ball arm locks to the ribs.
+    const tuck: XYZ = [TUCK_ARM[0] + torsoX, TUCK_ARM[1], TUCK_ARM[2]];
+    p.rArm = mixXYZ(p.rArm, tuck, carry);
+    p.rFore += (TUCK_FORE - p.rFore) * carry;
+    p.rHand = mixXYZ(p.rHand, [0.3, 0, 0.2], carry);
+    p.lArm = [p.lArm[0] - 0.15 * carry * sw, p.lArm[1], p.lArm[2]];
+  }
   return p;
+}
+
+function mixXYZ(a: XYZ, b: XYZ, k: number): XYZ {
+  return [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k,
+    a[2] + (b[2] - a[2]) * k];
 }
 
 function smooth(t: number): number {
@@ -571,15 +849,31 @@ function hitchPose(): Pose {
   return p;
 }
 
-function qbScan(t: number): Pose {
+/**
+ * Reading the field: shoulders and eyes sweep while the ball stays at
+ * the chest. Under pressure the feet stay alive, quick little steps
+ * in place ("happy feet") that grow as the rush closes in.
+ */
+function qbScan(t: number, pressure = 0): Pose {
   const p = qbIdle();
   const yaw = Math.sin(t * 1.6) * 0.28;
-  p.torso = [0.08, yaw, 0];
+  p.torso = [0.08, yaw - 0.1, 0];
   p.neck = [0.04, yaw * 0.45, 0];
-  p.lThigh = [0.2 + Math.sin(t * 2.2) * 0.08, 0, 0];
-  p.rThigh = [0.14, 0, 0];
-  p.rArm = [-0.52, 0.1 + Math.sin(t * 2) * 0.04, 0.3];
-  p.rFore = 1.68;
+  const sway = Math.sin(t * 0.9);
+  p.lThigh = [p.lThigh[0] + 0.05 * sway, p.lThigh[1], p.lThigh[2]];
+  p.rThigh = [p.rThigh[0] - 0.04 * sway, p.rThigh[1], p.rThigh[2]];
+  const quick = clamp01((pressure - 0.15) / 0.6);
+  if (quick > 0) {
+    const f = Math.sin(t * 22);
+    const l = Math.max(0, f) * quick;
+    const r = Math.max(0, -f) * quick;
+    p.lThigh = [p.lThigh[0] + 0.28 * l, p.lThigh[1], p.lThigh[2]];
+    p.rThigh = [p.rThigh[0] + 0.28 * r, p.rThigh[1], p.rThigh[2]];
+    p.lShin += 0.5 * l;
+    p.rShin += 0.5 * r;
+    p.pelvis = [p.pelvis[0] + 0.06 * quick, p.pelvis[1], p.pelvis[2]];
+  }
+  p.hop = Math.min(groundHop(p), groundHop(qbIdle()));
   return p;
 }
 
@@ -702,14 +996,15 @@ function windUp(base: Pose, w: number, legs: boolean): Pose {
   return lerpPose(base, top, w);
 }
 
+/** Hands up together in front of the face, thumbs close (a diamond). */
 function catchReach(): Pose {
   const p = skillIdle();
-  p.lArm = [-1.35, 0.18, -0.12];
-  p.rArm = [-1.32, -0.18, 0.12];
-  p.lFore = 0.28;
-  p.rFore = 0.32;
-  p.lHand = [0.08, 0, 0.08];
-  p.rHand = [0.08, 0, -0.08];
+  p.lArm = [-1.8, 0.66, 0.31];
+  p.rArm = [-1.8, -0.66, -0.31];
+  p.lFore = 0.79;
+  p.rFore = 0.79;
+  p.lHand = [-0.2, 0, 0.3];
+  p.rHand = [-0.2, 0, -0.3];
   p.torso = [-0.12, 0, 0];
   p.neck = [-0.06, 0, 0];
   p.hop = 0.04;
@@ -748,10 +1043,11 @@ function leapPose(t: number): Pose {
   const u = clamp01(t);
   const air = Math.sin(u * Math.PI);
   const p = catchReach();
-  p.lArm = [-2.75, 0.14, -0.08];
-  p.rArm = [-2.7, -0.14, 0.08];
-  p.lFore = 0.18;
-  p.rFore = 0.2;
+  // Arms up over the helmet, hands closing on the ball.
+  p.lArm = [-2.75, 0.14, 0.1];
+  p.rArm = [-2.7, -0.14, -0.1];
+  p.lFore = 0.3;
+  p.rFore = 0.32;
   p.torso = [-0.18, 0, 0];
   p.neck = [-0.4, 0, 0];
   p.lThigh = [0.55 * air, 0, 0.06];
@@ -762,15 +1058,18 @@ function leapPose(t: number): Pose {
   return p;
 }
 
-/** Ball secured high and tight before the first step upfield. */
+/**
+ * Ball secured high and tight before the first step upfield: tucked
+ * under the right arm, left hand over its nose.
+ */
 function catchTuck(): Pose {
   const p = skillIdle();
-  p.lArm = [-0.62, 0.3, -0.18];
-  p.rArm = [-0.45, -0.1, 0.34];
-  p.lFore = 1.75;
-  p.rFore = 1.6;
+  p.lArm = [-1.41, 0.86, 1.17];
+  p.rArm = [0.44, -0.88, 0];
+  p.lFore = 1.09;
+  p.rFore = 2.3;
   p.lHand = [0.2, 0.2, 0.1];
-  p.rHand = [0.2, 0, -0.1];
+  p.rHand = [0.3, 0, 0.2];
   p.torso = [0.18, 0, 0];
   p.neck = [0.1, 0, 0];
   return p;
@@ -900,17 +1199,63 @@ function stumblePose(t: number): Pose {
 }
 
 /** Defender lowers a shoulder and wraps through contact. */
+/**
+ * Wrap-up tackle, t 0–1: sink and drive with the arms cocked, shoulder
+ * into the hips with the head across and both arms closing behind the
+ * carrier, then go down with him (PlayerActor pitches the whole body
+ * forward from about 0.35), legs trailing out behind.
+ */
 function tacklePose(t: number): Pose {
-  const p = lineIdle(false);
-  const drive = Math.sin(Math.min(1, t) * Math.PI * 0.5);
-  p.pelvis = [0.36 + drive * 0.26, 0, 0];
-  p.torso = [0.48 + drive * 0.34, 0, 0];
-  p.lArm = [-0.72, 0.14, -0.82];
-  p.rArm = [-0.72, -0.14, 0.82];
-  p.lFore = 0.42;
-  p.rFore = 0.42;
-  p.neck = [0.18, 0, 0];
-  return p;
+  const u = clamp01(t);
+  const drive = lineIdle(false);
+  drive.pelvis = [0.4, 0, 0];
+  drive.torso = [0.35, 0, 0];
+  drive.lArm = [0.45, 0.2, -0.5];
+  drive.rArm = [0.45, -0.2, 0.5];
+  drive.lFore = 1.3;
+  drive.rFore = 1.3;
+  drive.lThigh = [0.75, 0, 0.04];
+  drive.rThigh = [-0.1, 0, -0.04];
+  drive.lShin = 0.9;
+  drive.rShin = 0.5;
+  drive.rFoot = 0.3;
+  drive.neck = [-0.25, 0, 0];
+  drive.hop = groundHop(drive);
+  const wrap: Pose = {
+    ...drive,
+    torso: [0.4, 0, 0],
+    lArm: [-0.3, 1.29, -0.35],
+    rArm: [-0.3, -1.29, 0.35],
+    lFore: 1.5,
+    rFore: 1.5,
+    lThigh: [0.55, 0, 0.04],
+    rThigh: [-0.25, 0, -0.04],
+    lShin: 0.7,
+    rShin: 0.35,
+    neck: [-0.3, 0.55, 0]
+  };
+  wrap.hop = groundHop(wrap);
+  const down: Pose = {
+    ...wrap,
+    // The root is pitched flat by now: body straight, chin up.
+    pelvis: [-0.1, 0, 0],
+    torso: [0.02, 0, 0],
+    lThigh: [0.02, 0, 0.08],
+    rThigh: [-0.08, 0, -0.08],
+    lShin: 0.3,
+    rShin: 0.5,
+    lFoot: 0.5,
+    rFoot: 0.5,
+    neck: [-1.0, 0.45, 0],
+    hop: 0
+  };
+  if (u < 0.22) {
+    return drive;
+  }
+  if (u < 0.4) {
+    return lerpPose(drive, wrap, ease((u - 0.22) / 0.18));
+  }
+  return lerpPose(wrap, down, ease((u - 0.4) / 0.6));
 }
 
 /**
@@ -1001,7 +1346,8 @@ function kindPose(
   kind: AnimKind,
   t: number,
   speed: number,
-  pos: Pos
+  pos: Pos,
+  seed: number
 ): Pose {
   switch (kind) {
     case 'passSet':
@@ -1010,36 +1356,61 @@ function kindPose(
       return rushPose(t, speed);
     case 'engage':
       return engagePose(t);
-    default: {
-      const p = idlePose(pos);
-      p.torso = [p.torso[0], Math.sin(t) * 0.03, 0];
-      p.hop = Math.abs(Math.sin(t * 2)) * 0.005;
-      return p;
-    }
+    default:
+      return breathe(idlePose(pos), t, seed);
   }
 }
 
-/** Right hand sits near hardcoded spawn (0.35, 1.55, 0.35). */
+/**
+ * Standing still is never frozen: slow breathing lifts the chest, the
+ * weight drifts from one foot to the other, each player on his own
+ * rhythm and with his own stance width.
+ */
+function breathe(p: Pose, t: number, seed: number): Pose {
+  const rate = 1.7 + 0.5 * seed;
+  const b = Math.sin(t * rate + seed * 11);
+  const sway = Math.sin(t * 0.45 + seed * 23);
+  const width = 0.03 * (seed - 0.5);
+  p.torso = [p.torso[0] - 0.02 * b, p.torso[1] + 0.03 * sway, p.torso[2]];
+  p.neck = [p.neck[0] + 0.015 * b, p.neck[1], p.neck[2]];
+  p.lArm = [p.lArm[0], p.lArm[1], p.lArm[2] - 0.03 * b];
+  p.rArm = [p.rArm[0], p.rArm[1], p.rArm[2] + 0.03 * b];
+  p.lThigh = [p.lThigh[0] + 0.04 * sway, p.lThigh[1], p.lThigh[2] - width];
+  p.rThigh = [p.rThigh[0] - 0.04 * sway, p.rThigh[1], p.rThigh[2] + width];
+  p.lShin += 0.06 * Math.max(0, sway);
+  p.rShin += 0.06 * Math.max(0, -sway);
+  p.shift += 0.02 * sway;
+  p.hop = groundHop(p);
+  return p;
+}
+
+/**
+ * QB at rest in the pocket: ball held in both hands at the chest,
+ * feet shoulder-width and staggered (right foot back, the throwing
+ * side), knees soft.
+ */
 function qbIdle(): Pose {
-  return {
-    pelvis: [0.04, 0, 0],
-    torso: [0.06, 0, 0],
-    lThigh: [0.12, 0, 0],
-    rThigh: [0.16, 0, 0],
-    lShin: 0.18,
-    rShin: 0.22,
-    lArm: [-0.4, 0.18, -0.22],
-    rArm: [-0.55, 0.08, 0.32],
-    lFore: 1.35,
-    rFore: 1.7,
-    lHand: [0.12, 0.1, 0.18],
-    rHand: [0.18, 0.28, -0.08],
+  const p: Pose = {
+    pelvis: [0.08, 0.1, 0],
+    torso: [0.08, -0.1, 0],
+    lThigh: [0.34, 0, -0.08],
+    rThigh: [0.02, 0, 0.1],
+    lShin: 0.34,
+    rShin: 0.36,
+    lArm: [-0.32, 1.02, -0.18],
+    rArm: [-0.44, -1.02, 0.08],
+    lFore: 1.54,
+    rFore: 1.55,
+    lHand: [0.1, 0, 0.2],
+    rHand: [0.1, 0, -0.2],
     lFoot: 0,
-    rFoot: 0,
+    rFoot: 0.06,
     neck: [0.05, 0, 0],
     hop: 0,
-    shift: 0
+    shift: 0.02
   };
+  p.hop = groundHop(p);
+  return p;
 }
 
 function skillIdle(): Pose {

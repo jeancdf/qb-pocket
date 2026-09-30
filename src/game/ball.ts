@@ -40,11 +40,16 @@ export class Football {
     this.mesh.position.set(0.01, -0.05, 0.02);
     this.spinner.rotation.set(0, 0, 0);
     this.mesh.rotation.set(0.4, 0.2, 1.2);
+    // Same size in the hand as in flight: undo the player's scale.
+    parent.updateWorldMatrix(true, false);
+    const s = parent.getWorldScale(new THREE.Vector3()).x;
+    this.mesh.scale.setScalar(BALL_VISUAL_SCALE / Math.max(s, 1e-3));
   }
 
   releaseToScene(scene: THREE.Scene, world: THREE.Vector3): void {
     this.holder?.remove(this.mesh);
     this.holder = null;
+    this.mesh.scale.setScalar(BALL_VISUAL_SCALE);
     scene.add(this.mesh);
     this.pos.copy(world);
     this.mesh.position.copy(world);
@@ -187,6 +192,8 @@ function buildBall(): { root: THREE.Group; spinner: THREE.Group } {
   addLaces(g, white);
   root.add(g);
   root.scale.setScalar(BALL_VISUAL_SCALE);
+  // Lets a player's rig find the ball in its hand (see gripBall).
+  root.userData.football = true;
   return { root, spinner: g };
 }
 

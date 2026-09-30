@@ -39,6 +39,7 @@ import { beatId, readHint } from './play-hints';
 import { SMASH, THROW_ORDER } from './playbook';
 import { PLAYS } from './plays';
 import { handPos, PlayerActor } from './players';
+import { animateCrowd } from './body-language';
 import { advancePoseClock } from './pose-blend';
 import {
   cpuPunts,
@@ -544,7 +545,7 @@ export class FootballGame {
       this.flow?.match.tick(dt);
     }
     this.tickCharge(dt);
-    this.qb().setWindUp(this.charge !== null);
+    this.qb().setWindUp(this.charge ? this.aimSpot() : null);
     this.tickActors(dt, live);
     this.line.update(dt, live, this.qb());
     if (live || this.phase === 'yac' || this.phase === 'return') {
@@ -589,8 +590,22 @@ export class FootballGame {
         this.huddle();
       }
     }
+    animateCrowd({
+      players: this.players,
+      ball: this.ball,
+      qb: this.qb(),
+      carrier: this.phase === 'yac' ? this.yac.carrier : null,
+      live: this.phase === 'play',
+      pressure: this.phase === 'play' ? this.pressure() : 0
+    }, dt);
     this.followCam(dt, live);
     this.madden.update(dt);
+  }
+
+  /** Where the charged pass is aimed (the ring on the grass). */
+  private aimSpot(): Vec2 {
+    const at = this.aimMark.mesh.position;
+    return { x: at.x, z: at.z };
   }
 
   render(): void {
